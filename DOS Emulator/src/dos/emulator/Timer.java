@@ -1,14 +1,17 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
 package dos.emulator;
+import java.util.*;
 
-/**
- *
- * @author jkim13
- */
-public class Timer {
-    
+public class Timer{
+	public static void main(String[] args) {
+
+		try {
+			  while (true) {//Or any Loops
+			   System.out.println("test"); //Do something
+			   Thread.sleep(5000); //1000 = 1sec
+			  }
+			 } 
+		catch (InterruptedException iex) {
+			   //blank
+			 }
+	}
 }
