@@ -55,6 +55,16 @@ public class CPU {
     public final static int CH = 5;
     public final static int DH = 6;
     public final static int BH = 7;
+    public final static int ES = 0;
+    public final static int CS = 1;
+    public final static int SS = 2;
+    public final static int DS = 3;
+    public final static int FS = 4;
+    public final static int GS = 5;
+    
+    public final static int NO_REP_PREFIX = 0;
+    public final static int REPZ = 1;
+    public final static int REPNZ = 2;
 
     boolean of, sf, zf, af, pf, cf;
     int additional_eflags_bits = 2;
@@ -111,6 +121,28 @@ public class CPU {
      * Segment register offset
      */
     private int current_sreg = -1;
+    /**
+     * REP prefix
+     */
+    private int rep = 0;
+
+    // Internal functions to write a word/byte
+    private void wb(int seg, int offset, int value) {
+        write_byte(seg_translation(seg, offset), value);
+    }
+
+    private void ww(int seg, int offset, int value) {
+        write_byte(seg_translation(seg, offset), value);
+    }
+
+    // Reading
+    private int rb(int seg, int offset) {
+        return read_byte(seg_translation(seg, offset));
+    }
+
+    private int rw(int seg, int offset) {
+        return read_word(seg_translation(seg, offset));
+    }
 
     private int seg_translation_internal(int sreg, int addr) {
         if (current_sreg != -1) {
@@ -170,6 +202,71 @@ public class CPU {
                 return seg_translation_internal(ss, registers[BP] + next_word());
             case 0x87:
                 return seg_translation_internal(ds, registers[BX] + next_word());
+            default:
+                throw new IllegalStateException("Unknown ModR/M value: " + Integer.toHexString(modrm & ~0x38));
+        }
+    }
+
+    private int discard_first_op(int $, int value) {
+        return value & 0xFFFF;
+    }
+
+    /**
+     * Helps with LEA
+     *
+     * @param modrm
+     * @return
+     */
+    private int lea_op(int modrm) {
+        switch (modrm & ~0x38) {
+            case 0:
+                return discard_first_op(ds, registers[BX] + registers[SI]);
+            case 1:
+                return discard_first_op(ds, registers[BX] + registers[DI]);
+            case 2:
+                return discard_first_op(ss, registers[BP] + registers[SI]);
+            case 3:
+                return discard_first_op(ss, registers[BP] + registers[DI]);
+            case 4:
+                return discard_first_op(ds, registers[SI]);
+            case 5:
+                return discard_first_op(ds, registers[DI]);
+            case 6:
+                return discard_first_op(ds, next_word());
+            case 7:
+                return discard_first_op(ds, registers[BX]);
+            case 0x40:
+                return discard_first_op(ds, registers[BX] + registers[SI] + next_byte());
+            case 0x41:
+                return discard_first_op(ds, registers[BX] + registers[DI] + next_byte());
+            case 0x42:
+                return discard_first_op(ss, registers[BP] + registers[SI] + next_byte());
+            case 0x43:
+                return discard_first_op(ss, registers[BP] + registers[DI] + next_byte());
+            case 0x44:
+                return discard_first_op(ds, registers[SI] + next_byte());
+            case 0x45:
+                return discard_first_op(ds, registers[DI] + next_byte());
+            case 0x46:
+                return discard_first_op(ss, registers[BP] + next_byte());
+            case 0x47:
+                return discard_first_op(ds, registers[BX] + next_byte());
+            case 0x80:
+                return discard_first_op(ds, registers[BX] + registers[SI] + next_word());
+            case 0x81:
+                return discard_first_op(ds, registers[BX] + registers[DI] + next_word());
+            case 0x82:
+                return discard_first_op(ss, registers[BP] + registers[SI] + next_word());
+            case 0x83:
+                return discard_first_op(ss, registers[BP] + registers[DI] + next_word());
+            case 0x84:
+                return discard_first_op(ds, registers[SI] + next_word());
+            case 0x85:
+                return discard_first_op(ds, registers[DI] + next_word());
+            case 0x86:
+                return discard_first_op(ss, registers[BP] + next_word());
+            case 0x87:
+                return discard_first_op(ds, registers[BX] + next_word());
             default:
                 throw new IllegalStateException("Unknown ModR/M value: " + Integer.toHexString(modrm & ~0x38));
         }
@@ -372,11 +469,53 @@ public class CPU {
         return b;
     }
 
+    public static final int CF = (1 << 0);
+    public static final int PF = (1 << 2);
+    public static final int AF = (1 << 4);
+    public static final int ZF = (1 << 6);
+    public static final int SF = (1 << 7);
+    public static final int DF = (1 << 10);
+    public static final int OF = (1 << 11);
+
+    public int get_eflags() {
+        int val = this.additional_eflags_bits;
+        if (of) {
+            val |= OF;
+        }
+        if (sf) {
+            val |= SF;
+        }
+        if (zf) {
+            val |= ZF;
+        }
+        if (af) {
+            val |= AF;
+        }
+        if (pf) {
+            val |= PF;
+        }
+        if (cf) {
+            val |= CF;
+        }
+        return val;
+    }
+
+    public void set_eflags(int c) {
+        of = (c & OF) != 0;
+        sf = (c & SF) != 0;
+        zf = (c & ZF) != 0;
+        af = (c & AF) != 0;
+        pf = (c & PF) != 0;
+        cf = (c & CF) != 0;
+        this.additional_eflags_bits = c & ~(OF | SF | ZF | AF | PF | CF);
+    }
+
     // Main loop
     public void run() {
         while (true) {
             run_instruction();
             current_sreg = -1;
+            rep = 0;
         }
     }
 
@@ -1039,8 +1178,305 @@ public class CPU {
                         eip += op1;
                     }
                     return;
-
+                case 0x80:
+                case 0x82:
+                    modrm = next_byte();
+                    op1 = read_rm8(modrm);
+                    op2 = (byte) next_byte();
+                    switch (modrm >> 3 & 7) {
+                        case 0:
+                            res = op1 + op2;
+                            set_add_flags(8, op1, op2, res);
+                            break;
+                        case 1:
+                            res = op1 | op2;
+                            set_bit_flags(8, op1, op2, res);
+                            break;
+                        case 2:
+                            res = cf ? 1 : 0 + op1 + op2;
+                            set_add_flags(8, op1, op2, res);
+                            break;
+                        case 3:
+                            res = op1 - op2;
+                            res -= cf ? 1 : 0;
+                            set_sub_flags(8, op1, op2, res);
+                            break;
+                        case 4:
+                            res = op1 & op2;
+                            set_bit_flags(8, op1, op2, res);
+                            break;
+                        case 5:
+                            res = op1 - op2;
+                            set_sub_flags(8, op1, op2, res);
+                            break;
+                        case 6:
+                            res = op1 ^ op2;
+                            set_bit_flags(8, op1, op2, res);
+                            break;
+                        case 7:
+                            res = op1 - op2;
+                            set_sub_flags(8, op1, op2, res);
+                            return;
+                        default:
+                            throw new Error("Unknown GRP3/16 opcode!");
+                    }
+                    write_rm8(modrm, res);
+                    return;
+                case 0x81:
+                case 0x83:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    if ((opcode & 2) == 2) {
+                        op2 = (byte) next_byte(); // 83
+                    } else {
+                        op2 = next_word(); // 81
+                    }
+                    switch (modrm >> 3 & 7) {
+                        case 0:
+                            res = op1 + op2;
+                            set_add_flags(16, op1, op2, res);
+                            break;
+                        case 1:
+                            res = op1 | op2;
+                            set_bit_flags(16, op1, op2, res);
+                            break;
+                        case 2:
+                            res = cf ? 1 : 0 + op1 + op2;
+                            set_add_flags(16, op1, op2, res);
+                            break;
+                        case 3:
+                            res = op1 - op2;
+                            res -= cf ? 1 : 0;
+                            set_sub_flags(16, op1, op2, res);
+                            break;
+                        case 4:
+                            res = op1 & op2;
+                            set_bit_flags(16, op1, op2, res);
+                            break;
+                        case 5:
+                            res = op1 - op2;
+                            set_sub_flags(16, op1, op2, res);
+                            break;
+                        case 6:
+                            res = op1 ^ op2;
+                            set_bit_flags(16, op1, op2, res);
+                            break;
+                        case 7:
+                            res = op1 - op2;
+                            set_sub_flags(16, op1, op2, res);
+                            return;
+                        default:
+                            throw new Error("Unknown GRP3/16 opcode!");
+                    }
+                    write_rm16(modrm, res);
+                    return;
+                case 0x84: // TEST8
+                    modrm = next_byte();
+                    op1 = read_rm8(modrm);
+                    op2 = read_reg8(modrm);
+                    res = op1 & op2;
+                    set_bit_flags(8, op1, op2, res);
+                    return;
+                case 0x85:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    res = op1 & op2;
+                    set_bit_flags(16, op1, op2, res);
+                    return;
+                case 0x86: { // XCHG
+                    modrm = next_byte();
+                    op1 = read_rm8(modrm);
+                    op2 = read_reg8(modrm);
+                    write_reg8(modrm, op1);
+                    write_rm8(modrm, op2);
+                    return;
+                }
+                case 0x87: { // XCHG
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    write_reg16(modrm, op1);
+                    write_rm16(modrm, op2);
+                    return;
+                }
+                case 0x88: // MOV
+                    modrm = next_byte();
+                    write_rm8(modrm, read_reg8(modrm));
+                    return;
+                case 0x89: // MOV
+                    modrm = next_byte();
+                    write_rm16(modrm, read_reg16(modrm));
+                    return;
+                case 0x8A: // MOV
+                    modrm = next_byte();
+                    write_reg8(modrm, read_rm8(modrm));
+                    return;
+                case 0x8B: // MOV
+                    modrm = next_byte();
+                    write_reg16(modrm, read_rm16(modrm));
+                    return;
+                case 0x8C:
+                    modrm = next_byte();
+                    switch (modrm >> 3 & 7) {
+                        case CS:
+                            op1 = cs;
+                            break;
+                        case DS:
+                            op1 = ds;
+                            break;
+                        case ES:
+                            op1 = es;
+                            break;
+                        case SS:
+                            op1 = ss;
+                            break;
+                        default:
+                            throw new IllegalStateException("Unknown segment register\n");
+                    }
+                    write_rm16(modrm, op1);
+                    return;
+                case 0x8D: // LEA
+                    modrm = next_byte();
+                    if (modrm >> 6 == 3) {
+                        throw new IllegalStateException("LEA with mod=3!");
+                    }
+                    write_reg16(modrm, lea_op(modrm));
+                    return;
+                case 0x8E:
+                    modrm = next_byte();
+                    op2 = read_rm16(modrm);
+                    switch (op2) {
+                        case CS:
+                            cs = op2;
+                            break;
+                        case DS:
+                            ds = op2;
+                            break;
+                        case ES:
+                            es = op2;
+                            break;
+                        case SS:
+                            ss = op2;
+                            break;
+                        default:
+                            throw new IllegalStateException("Unknown segment register\n");
+                    }
+                    return;
+                case 0x8F:
+                    modrm = next_byte();
+                    if ((modrm & 7) != 0) {
+                        throw new IllegalStateException("PUSH.rm [8F] is not zero!");
+                    }
+                    write_rm16(modrm, pop16());
+                    return;
                 case 0x90: // NOP
+                    return;
+                case 0x91:
+                case 0x92:
+                case 0x93:
+                case 0x94:
+                case 0x95:
+                case 0x96:
+                case 0x97: // XCHG
+                    op1 = opcode & 7;
+                    registers[AX] ^= registers[op1];
+                    registers[op1] ^= registers[AX];
+                    registers[AX] ^= registers[op1];
+                    return;
+                case 0x98: // CBW
+                    // https://www.felixcloutier.com/x86/CBW:CWDE:CDQE.html
+                    registers[AX] = ((byte) registers[AX]) & 0xFFFF;
+                    return;
+                case 0x99: // CWD
+                    // http://www.c-jump.com/CIS77/MLabs/M11arithmetic/M11_0110_cbw_cwd_cdq.htm
+                    registers[DX] = (registers[AX] & 0x8000) == 0 ? 0xFFFF : 0;
+                    return;
+                case 0x9A: {
+                    // CALLF
+                    int temp = cs;
+                    int temp1 = eip;
+                    push16(temp1);
+                    eip = next_word();
+                    cs = next_word();
+                    return;
+                }
+                case 0x9B: // WAIT
+                    return;
+                case 0x9C: // PUSHF
+                    push16(get_eflags());
+                    return;
+                case 0x9D:
+                    set_eflags(pop16());
+                    return;
+                case 0x9E: // SAHF
+                    op1 = get_reg8(AH) & 0xD5; // Mask out flags we do not need
+                    op2 = get_eflags() & ~0xFF; // Remove lower bits
+                    set_eflags(op1 | op2);
+                    return;
+                case 0x9F: // LAHF
+                    op1 = get_reg8(AH) & 0x2A; // Select the bits we will keep
+                    op2 = get_eflags() & 0xD5; // Only the bits we need
+                    set_reg8(AH, op1 | op2);
+                    return;
+                case 0xA0:
+                    set_reg8(AL, read_byte(seg_translation_internal(ds, next_word())));
+                    return;
+                case 0xA1:
+                    set_reg16(AX, read_word(seg_translation_internal(ds, next_word())));
+                    return;
+                case 0xA2:
+                    write_byte(seg_translation_internal(ds, next_word()), get_reg8(AL));
+                    return;
+                case 0xA3:
+                    write_word(seg_translation_internal(ds, next_word()), get_reg16(AX));
+                    return;
+                case 0xA4:
+                    switch (rep) {
+                        case NO_REP_PREFIX:
+                            wb(es, registers[DI], rb(ds, registers[SI]));
+                            if ((additional_eflags_bits & DF) == 0) {
+                                registers[DI] = (registers[DI] + 1) & 0xFFFF;
+                                registers[SI] = (registers[SI] + 1) & 0xFFFF;
+                            } else {
+                                registers[DI] = (registers[DI] - 1) & 0xFFFF;
+                                registers[SI] = (registers[SI] - 1) & 0xFFFF;
+                            }
+                            break;
+                        case REPNZ:
+                        case REPZ:
+                            int ofz = (additional_eflags_bits & DF) == 0 ? 1 : -1;
+                            for (; registers[CX] != 0; registers[CX] = (registers[CX] - 1) & 0xFFFF) {
+                                wb(es, registers[DI], rb(ds, registers[SI]));
+                                registers[DI] = (registers[DI] + ofz) & 0xFFFF;
+                                registers[SI] = (registers[SI] + ofz) & 0xFFFF;
+                            }
+                            break;
+                    }
+                    return;
+                case 0xA5:
+                    switch (rep) {
+                        case NO_REP_PREFIX:
+                            ww(es, registers[DI], rw(ds, registers[SI]));
+                            if ((additional_eflags_bits & DF) == 0) {
+                                registers[DI] = (registers[DI] + 2) & 0xFFFF;
+                                registers[SI] = (registers[SI] + 2) & 0xFFFF;
+                            } else {
+                                registers[DI] = (registers[DI] - 2) & 0xFFFF;
+                                registers[SI] = (registers[SI] - 2) & 0xFFFF;
+                            }
+                            break;
+                        case REPNZ:
+                        case REPZ:
+                            int ofz = (additional_eflags_bits & DF) == 0 ? 2 : -2;
+                            for (; registers[CX] != 0; registers[CX] = (registers[CX] - 1) & 0xFFFF) {
+                                ww(es, registers[DI], rw(ds, registers[SI]));
+                                registers[DI] = (registers[DI] + ofz) & 0xFFFF;
+                                registers[SI] = (registers[SI] + ofz) & 0xFFFF;
+                            }
+                            break;
+                    }
+                    return;
                 case 0xE6:
                     IO.write_port(next_byte(), get_reg8(AL));
                     return;
