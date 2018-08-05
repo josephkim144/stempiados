@@ -354,6 +354,7 @@ public class CPU {
             int opcode = next_byte();
             int modrm = 0, op1, op2, res;
             switch (opcode) {
+                // ADD
                 case 0x00:
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
@@ -387,11 +388,21 @@ public class CPU {
                     write_reg16(modrm, res);
                     continue;
                 case 0x04:
-                    set_reg8(AL, next_byte() + get_reg8(AL));
+                    op1 = get_reg8(AL);
+                    op2 = next_byte();
+                    res = op1 + op2;
+                    set_add_flags(8, op1, op2, res);
+                    set_reg8(AL, res);
                     continue;
                 case 0x05:
-                    registers[AX] += next_word();
+                    op1 = get_reg16(AX);
+                    op2 = next_word();
+                    res = op1 + op2;
+                    set_add_flags(16, op1, op2, res);
+                    set_reg16(AX, res);
                     continue;
+                    
+                // OR
                 case 0x08:
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
@@ -401,10 +412,45 @@ public class CPU {
                     write_rm8(modrm, res);
                     continue;
                 case 0x09:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    res = op1 | op2;
+                    set_bit_flags(16, op1, op2, res);
+                    write_rm16(modrm, res);
+                    continue;
                 case 0x0A:
+                    modrm = next_byte();
+                    op1 = read_reg8(modrm);
+                    op2 = read_rm8(modrm);
+                    res = op1 | op2;
+                    set_bit_flags(8, op1, op2, res);
+                    write_reg8(modrm, res);
+                    continue;
                 case 0x0B:
+                    modrm = next_byte();
+                    op1 = read_reg16(modrm);
+                    op2 = read_rm16(modrm);
+                    res = op1 | op2;
+                    set_bit_flags(16, op1, op2, res);
+                    write_reg16(modrm, res);
+                    continue;
                 case 0x0C:
-                case 0x0D: // OR
+                    op1 = get_reg8(AL);
+                    op2 = next_byte();
+                    res = op1 | op2;
+                    set_bit_flags(8, op1, op2, res);
+                    set_reg8(AL, res);
+                    continue;
+                case 0x0D:
+                    op1 = get_reg16(AX);
+                    op2 = next_word();
+                    res = op1 | op2;
+                    set_bit_flags(16, op1, op2, res);
+                    set_reg16(AX, res);
+                    continue;
+                    
+                // ADC
                 case 0x10:
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
@@ -414,75 +460,283 @@ public class CPU {
                     write_rm8(modrm, res);
                     continue;
                 case 0x11:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    res = (cf ? 1 : 0) + (op1 + op2);
+                    set_add_flags(16, op1, op2, res);
+                    write_rm16(modrm, res);
+                    continue;
                 case 0x12:
+                    modrm = next_byte();
+                    op1 = read_reg8(modrm);
+                    op2 = read_rm8(modrm);
+                    res = (cf ? 1 : 0) + (op1 + op2);
+                    set_add_flags(8, op1, op2, res);
+                    write_reg8(modrm, res);
+                    continue;
                 case 0x13:
+                    modrm = next_byte();
+                    op1 = read_reg16(modrm);
+                    op2 = read_rm16(modrm);
+                    res = (cf ? 1 : 0) + (op1 + op2);
+                    set_add_flags(16, op1, op2, res);
+                    write_reg16(modrm, res);
+                    continue;
                 case 0x14:
-                case 0x15: // ADC
+                    op1 = get_reg8(AL);
+                    op2 = next_byte();
+                    res = (cf ? 1 : 0) + op1 + op2;
+                    set_add_flags(8, op1, op2, res);
+                    set_reg8(AL, res);
+                    continue;
+                case 0x15:
+                    op1 = get_reg16(AX);
+                    op2 = next_word();
+                    res = (cf ? 1 : 0) + (op1 + op2);
+                    set_add_flags(16, op1, op2, res);
+                    set_reg16(AX, res);
+                    continue;
+                    
+                // SBB
                 case 0x18:
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
                     op2 = read_reg8(modrm);
                     res = (op1 - op2);
                     res -= (cf ? 1 : 0);
-                    set_add_flags(8, op1, op2, res);
+                    set_sub_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
                     continue;
                 case 0x19:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    res = (op1 - op2);
+                    res -= (cf ? 1 : 0);
+                    set_sub_flags(16, op1, op2, res);
+                    write_rm16(modrm, res);
+                    continue;
                 case 0x1A:
+                    modrm = next_byte();
+                    op1 = read_reg8(modrm);
+                    op2 = read_rm8(modrm);
+                    res = (op1 - op2);
+                    res -= (cf ? 1 : 0);
+                    set_sub_flags(8, op1, op2, res);
+                    write_reg8(modrm, res);
+                    continue;
                 case 0x1B:
+                    modrm = next_byte();
+                    op1 = read_reg16(modrm);
+                    op2 = read_rm16(modrm);
+                    res = (op1 - op2);
+                    res -= (cf ? 1 : 0);
+                    set_sub_flags(16, op1, op2, res);
+                    write_reg16(modrm, res);
+                    continue;
                 case 0x1C:
-                case 0x1D: // SBB
+                    op1 = get_reg8(AL);
+                    op2 = next_byte();
+                    res = (op1 - op2);
+                    res -= (cf ? 1 : 0);
+                    set_sub_flags(8, op1, op2, res);
+                    set_reg8(AL, res);
+                    continue;
+                case 0x1D:
+                    op1 = get_reg16(AX);
+                    op2 = next_word();
+                    res = (op1 - op2);
+                    res -= (cf ? 1 : 0);
+                    set_sub_flags(16, op1, op2, res);
+                    set_reg16(AX, res);
+                    continue;
+                
+                // AND
                 case 0x20:
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
                     op2 = read_reg8(modrm);
                     res = op1 & op2;
-                    set_sub_flags(8, op1, op2, res);
+                    set_bit_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
                     continue;
                 case 0x21:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    res = op1 & op2;
+                    set_bit_flags(16, op1, op2, res);
+                    write_rm16(modrm, res);
+                    continue;
                 case 0x22:
+                    modrm = next_byte();
+                    op1 = read_reg8(modrm);
+                    op2 = read_rm8(modrm);
+                    res = (op1 & op2);
+                    set_bit_flags(8, op1, op2, res);
+                    write_reg8(modrm, res);
+                    continue;
                 case 0x23:
+                    modrm = next_byte();
+                    op1 = read_reg16(modrm);
+                    op2 = read_rm16(modrm);
+                    res = (op1 & op2);
+                    set_bit_flags(16, op1, op2, res);
+                    write_reg16(modrm, res);
+                    continue;
                 case 0x24:
-                case 0x25: // AND
+                    op1 = get_reg8(AL);
+                    op2 = next_byte();
+                    res = (op1 & op2);
+                    set_bit_flags(8, op1, op2, res);
+                    set_reg8(AL, res);
+                    continue;
+                case 0x25:
+                    op1 = get_reg16(AX);
+                    op2 = next_word();
+                    res = op1 & op2;
+                    set_bit_flags(16, op1, op2, res);
+                    set_reg16(AX, res);
+                    continue;
+                
+                // SUB
                 case 0x28:
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
                     op2 = read_reg8(modrm);
                     res = op1 - op2;
-                    set_bit_flags(8, op1, op2, res);
+                    set_sub_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
                     continue;
                 case 0x29:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    res = op1 - op2;
+                    set_sub_flags(16, op1, op2, res);
+                    write_rm16(modrm, res);
+                    continue;
                 case 0x2A:
+                    modrm = next_byte();
+                    op1 = read_reg8(modrm);
+                    op2 = read_rm8(modrm);
+                    res = (op1 - op2);
+                    set_sub_flags(8, op1, op2, res);
+                    write_reg8(modrm, res);
+                    continue;
                 case 0x2B:
+                    modrm = next_byte();
+                    op1 = read_reg16(modrm);
+                    op2 = read_rm16(modrm);
+                    res = (op1 - op2);
+                    set_sub_flags(16, op1, op2, res);
+                    write_reg16(modrm, res);
+                    continue;
                 case 0x2C:
-                case 0x2D: // SUB
+                    op1 = get_reg8(AL);
+                    op2 = next_byte();
+                    res = (op1 - op2);
+                    set_sub_flags(8, op1, op2, res);
+                    set_reg8(AL, res);
+                    break;
+                case 0x2D:
+                    op1 = get_reg16(AX);
+                    op2 = next_word();
+                    res = op1 - op2;
+                    set_sub_flags(16, op1, op2, res);
+                    set_reg16(AX, res);
+                    continue;
+                
+                // XOR
                 case 0x30:
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
                     op2 = read_reg8(modrm);
                     res = op1 ^ op2;
-                    set_sub_flags(8, op1, op2, res);
+                    set_bit_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
                     continue;
                 case 0x31:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    res = op1 ^ op2;
+                    set_bit_flags(16, op1, op2, res);
+                    write_rm16(modrm, res);
+                    continue;
                 case 0x32:
+                    modrm = next_byte();
+                    op1 = read_reg8(modrm);
+                    op2 = read_rm8(modrm);
+                    res = op1 ^ op2;
+                    set_bit_flags(8, op1, op2, res);
+                    write_reg8(modrm, res);
+                    continue;
                 case 0x33:
+                    modrm = next_byte();
+                    op1 = read_reg16(modrm);
+                    op2 = read_rm16(modrm);
+                    res = op1 ^ op2;
+                    set_bit_flags(16, op1, op2, res);
+                    write_reg16(modrm, res);
+                    continue;
                 case 0x34:
-                case 0x35: // XOR
+                    op1 = get_reg8(AL);
+                    op2 = next_byte();
+                    res = (op1 ^ op2);
+                    set_bit_flags(8, op1, op2, res);
+                    set_reg8(AL, res);
+                    break;
+                case 0x35:
+                    op1 = get_reg16(AX);
+                    op2 = next_word();
+                    res = op1 ^ op2;
+                    set_bit_flags(16, op1, op2, res);
+                    set_reg16(AX, res);
+                    continue;
+                
+                // CMP
                 case 0x38:
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
                     op2 = read_reg8(modrm);
-                    res = op1 ^ op2;
-                    set_bit_flags(8, op1, op2, res);
+                    res = op1 - op2;
+                    set_sub_flags(8, op1, op2, res);
                     continue;
                 case 0x39:
+                    modrm = next_byte();
+                    op1 = read_rm16(modrm);
+                    op2 = read_reg16(modrm);
+                    res = op1 - op2;
+                    set_sub_flags(16, op1, op2, res);
+                    continue;
                 case 0x3A:
+                    modrm = next_byte();
+                    op1 = read_reg8(modrm);
+                    op2 = read_rm8(modrm);
+                    res = op1 - op2;
+                    set_sub_flags(8, op1, op2, res);
+                    continue;
                 case 0x3B:
+                    modrm = next_byte();
+                    op1 = read_reg16(modrm);
+                    op2 = read_rm16(modrm);
+                    res = op1 - op2;
+                    set_sub_flags(16, op1, op2, res);
+                    continue;
                 case 0x3C:
-                case 0x3D: // CMP
+                    op1 = get_reg8(AL);
+                    op2 = next_byte();
+                    res = (op1 - op2);
+                    set_sub_flags(8, op1, op2, res);
+                    continue;
+                case 0x3D:
+                    op1 = get_reg16(AX);
+                    op2 = next_word();
+                    res = op1 - op2;
+                    set_sub_flags(16, op1, op2, res);
+                    continue;
                 case 0x90: // NOP
                 case 0xE6:
                     IO.write_port(next_byte(), get_reg8(AL));
@@ -493,3 +747,4 @@ public class CPU {
         }
     }
 }
+
