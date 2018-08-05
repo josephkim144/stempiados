@@ -107,56 +107,69 @@ public class CPU {
         return next_byte() | next_byte() << 8;
     }
 
+    /**
+     * Segment register offset
+     */
+    private int current_sreg = -1;
+
+    private int seg_translation_internal(int sreg, int addr) {
+        if (current_sreg != -1) {
+            sreg = current_sreg;
+            current_sreg = -1;
+        }
+        return seg_translation(sreg, addr);
+    }
+
     private int decode_modrm(int modrm) {
         switch (modrm & ~0x38) {
             case 0:
-                return seg_translation(ds, registers[BX] + registers[SI]);
+                return seg_translation_internal(ds, registers[BX] + registers[SI]);
             case 1:
-                return seg_translation(ds, registers[BX] + registers[DI]);
+                return seg_translation_internal(ds, registers[BX] + registers[DI]);
             case 2:
-                return seg_translation(ss, registers[BP] + registers[SI]);
+                return seg_translation_internal(ss, registers[BP] + registers[SI]);
             case 3:
-                return seg_translation(ss, registers[BP] + registers[DI]);
+                return seg_translation_internal(ss, registers[BP] + registers[DI]);
             case 4:
-                return seg_translation(ds, registers[SI]);
+                return seg_translation_internal(ds, registers[SI]);
             case 5:
-                return seg_translation(ds, registers[DI]);
+                return seg_translation_internal(ds, registers[DI]);
             case 6:
-                return seg_translation(ds, next_word());
+                return seg_translation_internal(ds, next_word());
             case 7:
-                return seg_translation(ds, registers[BX]);
+                return seg_translation_internal(ds, registers[BX]);
             case 0x40:
-                return seg_translation(ds, registers[BX] + registers[SI] + next_byte());
+                return seg_translation_internal(ds, registers[BX] + registers[SI] + next_byte());
             case 0x41:
-                return seg_translation(ds, registers[BX] + registers[DI] + next_byte());
+                return seg_translation_internal(ds, registers[BX] + registers[DI] + next_byte());
             case 0x42:
-                return seg_translation(ss, registers[BP] + registers[SI] + next_byte());
+                return seg_translation_internal(ss, registers[BP] + registers[SI] + next_byte());
             case 0x43:
-                return seg_translation(ss, registers[BP] + registers[DI] + next_byte());
+                return seg_translation_internal(ss, registers[BP] + registers[DI] + next_byte());
             case 0x44:
-                return seg_translation(ds, registers[SI] + next_byte());
+                return seg_translation_internal(ds, registers[SI] + next_byte());
             case 0x45:
-                return seg_translation(ds, registers[DI] + next_byte());
+                return seg_translation_internal(ds, registers[DI] + next_byte());
             case 0x46:
-                return seg_translation(ss, registers[BP] + next_byte());
+                return seg_translation_internal(ss, registers[BP] + next_byte());
             case 0x47:
-                return seg_translation(ds, registers[BX] + next_byte());
+                return seg_translation_internal(ds, registers[BX] + next_byte());
             case 0x80:
-                return seg_translation(ds, registers[BX] + registers[SI] + next_word());
+                return seg_translation_internal(ds, registers[BX] + registers[SI] + next_word());
             case 0x81:
-                return seg_translation(ds, registers[BX] + registers[DI] + next_word());
+                return seg_translation_internal(ds, registers[BX] + registers[DI] + next_word());
             case 0x82:
-                return seg_translation(ss, registers[BP] + registers[SI] + next_word());
+                return seg_translation_internal(ss, registers[BP] + registers[SI] + next_word());
             case 0x83:
-                return seg_translation(ss, registers[BP] + registers[DI] + next_word());
+                return seg_translation_internal(ss, registers[BP] + registers[DI] + next_word());
             case 0x84:
-                return seg_translation(ds, registers[SI] + next_word());
+                return seg_translation_internal(ds, registers[SI] + next_word());
             case 0x85:
-                return seg_translation(ds, registers[DI] + next_word());
+                return seg_translation_internal(ds, registers[DI] + next_word());
             case 0x86:
-                return seg_translation(ss, registers[BP] + next_word());
+                return seg_translation_internal(ss, registers[BP] + next_word());
             case 0x87:
-                return seg_translation(ds, registers[BX] + next_word());
+                return seg_translation_internal(ds, registers[BX] + next_word());
             default:
                 throw new IllegalStateException("Unknown ModR/M value: " + Integer.toHexString(modrm & ~0x38));
         }
@@ -348,8 +361,26 @@ public class CPU {
         set_zf_pf_sf(res, size);
     }
 
+    public void push16(int data) {
+        registers[SP] = (registers[SP] - 2) & 0xFFFF;
+        write_word(seg_translation(ss, registers[SP]), data);
+    }
+
+    public int pop16() {
+        int b = read_word(seg_translation(ss, registers[SP]));
+        registers[SP] = (registers[SP] + 2) & 0xFFFF;
+        return b;
+    }
+
     // Main loop
     public void run() {
+        while (true) {
+            run_instruction();
+            current_sreg = -1;
+        }
+    }
+
+    private void run_instruction() {
         while (true) {
             int opcode = next_byte();
             int modrm = 0, op1, op2, res;
@@ -362,7 +393,7 @@ public class CPU {
                     res = op1 + op2;
                     set_add_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
-                    continue;
+                    return;
                 case 0x01:
                     modrm = next_byte();
                     op1 = read_rm16(modrm);
@@ -370,7 +401,7 @@ public class CPU {
                     res = op1 + op2;
                     set_add_flags(16, op1, op2, res);
                     write_rm16(modrm, res);
-                    continue;
+                    return;
                 case 0x02:
                     modrm = next_byte();
                     op1 = read_reg8(modrm);
@@ -378,7 +409,7 @@ public class CPU {
                     res = op1 + op2;
                     set_add_flags(8, op1, op2, res);
                     write_reg8(modrm, res);
-                    continue;
+                    return;
                 case 0x03:
                     modrm = next_byte();
                     op1 = read_reg16(modrm);
@@ -386,22 +417,28 @@ public class CPU {
                     res = op1 + op2;
                     set_add_flags(16, op1, op2, res);
                     write_reg16(modrm, res);
-                    continue;
+                    return;
                 case 0x04:
                     op1 = get_reg8(AL);
                     op2 = next_byte();
                     res = op1 + op2;
                     set_add_flags(8, op1, op2, res);
                     set_reg8(AL, res);
-                    continue;
+                    return;
                 case 0x05:
                     op1 = get_reg16(AX);
                     op2 = next_word();
                     res = op1 + op2;
                     set_add_flags(16, op1, op2, res);
                     set_reg16(AX, res);
-                    continue;
-                    
+                    return;
+                case 0x06:
+                    push16(es);
+                    return;
+                case 0x07:
+                    es = pop16();
+                    return;
+
                 // OR
                 case 0x08:
                     modrm = next_byte();
@@ -410,7 +447,7 @@ public class CPU {
                     res = op1 | op2;
                     set_bit_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
-                    continue;
+                    return;
                 case 0x09:
                     modrm = next_byte();
                     op1 = read_rm16(modrm);
@@ -418,7 +455,7 @@ public class CPU {
                     res = op1 | op2;
                     set_bit_flags(16, op1, op2, res);
                     write_rm16(modrm, res);
-                    continue;
+                    return;
                 case 0x0A:
                     modrm = next_byte();
                     op1 = read_reg8(modrm);
@@ -426,7 +463,7 @@ public class CPU {
                     res = op1 | op2;
                     set_bit_flags(8, op1, op2, res);
                     write_reg8(modrm, res);
-                    continue;
+                    return;
                 case 0x0B:
                     modrm = next_byte();
                     op1 = read_reg16(modrm);
@@ -434,22 +471,28 @@ public class CPU {
                     res = op1 | op2;
                     set_bit_flags(16, op1, op2, res);
                     write_reg16(modrm, res);
-                    continue;
+                    return;
                 case 0x0C:
                     op1 = get_reg8(AL);
                     op2 = next_byte();
                     res = op1 | op2;
                     set_bit_flags(8, op1, op2, res);
                     set_reg8(AL, res);
-                    continue;
+                    return;
                 case 0x0D:
                     op1 = get_reg16(AX);
                     op2 = next_word();
                     res = op1 | op2;
                     set_bit_flags(16, op1, op2, res);
                     set_reg16(AX, res);
-                    continue;
-                    
+                    return;
+                case 0x0E:
+                    push16(cs);
+                    return;
+                case 0x0F:
+                    cs = pop16();
+                    return;
+
                 // ADC
                 case 0x10:
                     modrm = next_byte();
@@ -458,7 +501,7 @@ public class CPU {
                     res = (cf ? 1 : 0) + (op1 + op2);
                     set_add_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
-                    continue;
+                    return;
                 case 0x11:
                     modrm = next_byte();
                     op1 = read_rm16(modrm);
@@ -466,7 +509,7 @@ public class CPU {
                     res = (cf ? 1 : 0) + (op1 + op2);
                     set_add_flags(16, op1, op2, res);
                     write_rm16(modrm, res);
-                    continue;
+                    return;
                 case 0x12:
                     modrm = next_byte();
                     op1 = read_reg8(modrm);
@@ -474,7 +517,7 @@ public class CPU {
                     res = (cf ? 1 : 0) + (op1 + op2);
                     set_add_flags(8, op1, op2, res);
                     write_reg8(modrm, res);
-                    continue;
+                    return;
                 case 0x13:
                     modrm = next_byte();
                     op1 = read_reg16(modrm);
@@ -482,22 +525,28 @@ public class CPU {
                     res = (cf ? 1 : 0) + (op1 + op2);
                     set_add_flags(16, op1, op2, res);
                     write_reg16(modrm, res);
-                    continue;
+                    return;
                 case 0x14:
                     op1 = get_reg8(AL);
                     op2 = next_byte();
                     res = (cf ? 1 : 0) + op1 + op2;
                     set_add_flags(8, op1, op2, res);
                     set_reg8(AL, res);
-                    continue;
+                    return;
                 case 0x15:
                     op1 = get_reg16(AX);
                     op2 = next_word();
                     res = (cf ? 1 : 0) + (op1 + op2);
                     set_add_flags(16, op1, op2, res);
                     set_reg16(AX, res);
-                    continue;
-                    
+                    return;
+                case 0x16:
+                    push16(ss);
+                    return;
+                case 0x17:
+                    ss = pop16();
+                    return;
+
                 // SBB
                 case 0x18:
                     modrm = next_byte();
@@ -507,7 +556,7 @@ public class CPU {
                     res -= (cf ? 1 : 0);
                     set_sub_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
-                    continue;
+                    return;
                 case 0x19:
                     modrm = next_byte();
                     op1 = read_rm16(modrm);
@@ -516,7 +565,7 @@ public class CPU {
                     res -= (cf ? 1 : 0);
                     set_sub_flags(16, op1, op2, res);
                     write_rm16(modrm, res);
-                    continue;
+                    return;
                 case 0x1A:
                     modrm = next_byte();
                     op1 = read_reg8(modrm);
@@ -525,7 +574,7 @@ public class CPU {
                     res -= (cf ? 1 : 0);
                     set_sub_flags(8, op1, op2, res);
                     write_reg8(modrm, res);
-                    continue;
+                    return;
                 case 0x1B:
                     modrm = next_byte();
                     op1 = read_reg16(modrm);
@@ -534,7 +583,7 @@ public class CPU {
                     res -= (cf ? 1 : 0);
                     set_sub_flags(16, op1, op2, res);
                     write_reg16(modrm, res);
-                    continue;
+                    return;
                 case 0x1C:
                     op1 = get_reg8(AL);
                     op2 = next_byte();
@@ -542,7 +591,7 @@ public class CPU {
                     res -= (cf ? 1 : 0);
                     set_sub_flags(8, op1, op2, res);
                     set_reg8(AL, res);
-                    continue;
+                    return;
                 case 0x1D:
                     op1 = get_reg16(AX);
                     op2 = next_word();
@@ -550,8 +599,14 @@ public class CPU {
                     res -= (cf ? 1 : 0);
                     set_sub_flags(16, op1, op2, res);
                     set_reg16(AX, res);
-                    continue;
-                
+                    return;
+                case 0x1E:
+                    push16(ds);
+                    return;
+                case 0x1F:
+                    ds = pop16();
+                    return;
+
                 // AND
                 case 0x20:
                     modrm = next_byte();
@@ -560,7 +615,7 @@ public class CPU {
                     res = op1 & op2;
                     set_bit_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
-                    continue;
+                    return;
                 case 0x21:
                     modrm = next_byte();
                     op1 = read_rm16(modrm);
@@ -568,7 +623,7 @@ public class CPU {
                     res = op1 & op2;
                     set_bit_flags(16, op1, op2, res);
                     write_rm16(modrm, res);
-                    continue;
+                    return;
                 case 0x22:
                     modrm = next_byte();
                     op1 = read_reg8(modrm);
@@ -576,7 +631,7 @@ public class CPU {
                     res = (op1 & op2);
                     set_bit_flags(8, op1, op2, res);
                     write_reg8(modrm, res);
-                    continue;
+                    return;
                 case 0x23:
                     modrm = next_byte();
                     op1 = read_reg16(modrm);
@@ -584,22 +639,48 @@ public class CPU {
                     res = (op1 & op2);
                     set_bit_flags(16, op1, op2, res);
                     write_reg16(modrm, res);
-                    continue;
+                    return;
                 case 0x24:
                     op1 = get_reg8(AL);
                     op2 = next_byte();
                     res = (op1 & op2);
                     set_bit_flags(8, op1, op2, res);
                     set_reg8(AL, res);
-                    continue;
+                    return;
                 case 0x25:
                     op1 = get_reg16(AX);
                     op2 = next_word();
                     res = op1 & op2;
                     set_bit_flags(16, op1, op2, res);
                     set_reg16(AX, res);
+                    return;
+                case 0x26:
+                    current_sreg = es;
                     continue;
-                
+                case 0x27: {
+                    // https://www.felixcloutier.com/x86/DAA.html
+                    int old_al = get_reg8(AL);
+                    int al = old_al;
+                    boolean old_cf = cf;
+                    cf = false;
+                    if (((al & 15) > 9) || af) {
+                        al += 6;
+                        cf = old_cf || (al > 255); // al > 255 is carry out
+                        al &= 0xFF;
+                        af = true;
+                    } else {
+                        af = false;
+                    }
+                    if ((old_al > 0x99) || old_cf) {
+                        al = (al + 0x60) & 0xFF;
+                        cf = true;
+                    } else {
+                        cf = false;
+                    }
+                    set_reg8(AL, al);
+                    return;
+                }
+
                 // SUB
                 case 0x28:
                     modrm = next_byte();
@@ -608,7 +689,7 @@ public class CPU {
                     res = op1 - op2;
                     set_sub_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
-                    continue;
+                    return;
                 case 0x29:
                     modrm = next_byte();
                     op1 = read_rm16(modrm);
@@ -616,7 +697,7 @@ public class CPU {
                     res = op1 - op2;
                     set_sub_flags(16, op1, op2, res);
                     write_rm16(modrm, res);
-                    continue;
+                    return;
                 case 0x2A:
                     modrm = next_byte();
                     op1 = read_reg8(modrm);
@@ -624,7 +705,7 @@ public class CPU {
                     res = (op1 - op2);
                     set_sub_flags(8, op1, op2, res);
                     write_reg8(modrm, res);
-                    continue;
+                    return;
                 case 0x2B:
                     modrm = next_byte();
                     op1 = read_reg16(modrm);
@@ -632,7 +713,7 @@ public class CPU {
                     res = (op1 - op2);
                     set_sub_flags(16, op1, op2, res);
                     write_reg16(modrm, res);
-                    continue;
+                    return;
                 case 0x2C:
                     op1 = get_reg8(AL);
                     op2 = next_byte();
@@ -646,8 +727,33 @@ public class CPU {
                     res = op1 - op2;
                     set_sub_flags(16, op1, op2, res);
                     set_reg16(AX, res);
+                    return;
+                case 0x2E:
+                    current_sreg = cs;
                     continue;
-                
+                case 0x2F: {// https://www.felixcloutier.com/x86/DAS.html
+                    int old_al = get_reg8(AL);
+                    int al = old_al;
+                    boolean old_cf = cf;
+                    cf = false;
+                    if (((al & 15) > 9) || af) {
+                        al -= 6;
+                        cf = old_cf || (al < 0); // al < 0 is carry out
+                        al &= 0xFF;
+                        af = true;
+                    } else {
+                        af = false;
+                    }
+                    if ((old_al > 0x99) || old_cf) {
+                        al = (al - 0x60) & 0xFF;
+                        cf = true;
+                    } else {
+                        cf = false;
+                    }
+                    set_reg8(AL, al);
+                    return;
+                }
+
                 // XOR
                 case 0x30:
                     modrm = next_byte();
@@ -656,7 +762,7 @@ public class CPU {
                     res = op1 ^ op2;
                     set_bit_flags(8, op1, op2, res);
                     write_rm8(modrm, res);
-                    continue;
+                    return;
                 case 0x31:
                     modrm = next_byte();
                     op1 = read_rm16(modrm);
@@ -664,7 +770,7 @@ public class CPU {
                     res = op1 ^ op2;
                     set_bit_flags(16, op1, op2, res);
                     write_rm16(modrm, res);
-                    continue;
+                    return;
                 case 0x32:
                     modrm = next_byte();
                     op1 = read_reg8(modrm);
@@ -672,7 +778,7 @@ public class CPU {
                     res = op1 ^ op2;
                     set_bit_flags(8, op1, op2, res);
                     write_reg8(modrm, res);
-                    continue;
+                    return;
                 case 0x33:
                     modrm = next_byte();
                     op1 = read_reg16(modrm);
@@ -680,7 +786,7 @@ public class CPU {
                     res = op1 ^ op2;
                     set_bit_flags(16, op1, op2, res);
                     write_reg16(modrm, res);
-                    continue;
+                    return;
                 case 0x34:
                     op1 = get_reg8(AL);
                     op2 = next_byte();
@@ -694,8 +800,23 @@ public class CPU {
                     res = op1 ^ op2;
                     set_bit_flags(16, op1, op2, res);
                     set_reg16(AX, res);
+                    return;
+                case 0x36:
+                    current_sreg = ss;
                     continue;
-                
+                case 0x37:
+                    // https://www.felixcloutier.com/x86/AAA.html
+                    if (((get_reg8(AL) & 15) > 9) || af) {
+                        registers[AX] = (registers[AX] + 0x106) & 0xFFFF;
+                        af = true;
+                        cf = true;
+                    } else {
+                        af = false;
+                        cf = false;
+                    }
+                    set_reg8(AL, 0x0F & get_reg8(AL));
+                    return;
+
                 // CMP
                 case 0x38:
                     modrm = next_byte();
@@ -703,44 +824,226 @@ public class CPU {
                     op2 = read_reg8(modrm);
                     res = op1 - op2;
                     set_sub_flags(8, op1, op2, res);
-                    continue;
+                    return;
                 case 0x39:
                     modrm = next_byte();
                     op1 = read_rm16(modrm);
                     op2 = read_reg16(modrm);
                     res = op1 - op2;
                     set_sub_flags(16, op1, op2, res);
-                    continue;
+                    return;
                 case 0x3A:
                     modrm = next_byte();
                     op1 = read_reg8(modrm);
                     op2 = read_rm8(modrm);
                     res = op1 - op2;
                     set_sub_flags(8, op1, op2, res);
-                    continue;
+                    return;
                 case 0x3B:
                     modrm = next_byte();
                     op1 = read_reg16(modrm);
                     op2 = read_rm16(modrm);
                     res = op1 - op2;
                     set_sub_flags(16, op1, op2, res);
-                    continue;
+                    return;
                 case 0x3C:
                     op1 = get_reg8(AL);
                     op2 = next_byte();
                     res = (op1 - op2);
                     set_sub_flags(8, op1, op2, res);
-                    continue;
+                    return;
                 case 0x3D:
                     op1 = get_reg16(AX);
                     op2 = next_word();
                     res = op1 - op2;
                     set_sub_flags(16, op1, op2, res);
+                    return;
+                case 0x3E:
+                    current_sreg = ds;
                     continue;
+                case 0x3F:
+                    // https://www.felixcloutier.com/x86/AAS.html
+                    if (((get_reg8(AL) & 15) > 9) || af) {
+                        registers[AX] = (registers[AX] - 0x106) & 0xFFFF;
+                        set_reg8(AH, get_reg8(AH) - 1);
+                        af = true;
+                        cf = true;
+                        set_reg8(AL, 0x0F & get_reg8(AL));
+                    } else {
+                        af = false;
+                        cf = false;
+                        set_reg8(AL, 0x0F & get_reg8(AL));
+                    }
+                    return;
+                case 0x40:
+                case 0x41:
+                case 0x42:
+                case 0x43:
+                case 0x44:
+                case 0x45:
+                case 0x46:
+                case 0x47: {
+                    boolean saved_cf = cf;
+                    op1 = registers[opcode & 7];
+                    res = (op1 + 1);
+                    set_add_flags(16, op1, 1, res);
+                    cf = saved_cf;
+                    registers[opcode & 7] = res & 0xFFFF;
+                    return;
+                }
+                case 0x48:
+                case 0x49:
+                case 0x4A:
+                case 0x4B:
+                case 0x4C:
+                case 0x4D:
+                case 0x4E:
+                case 0x4F: {
+                    boolean saved_cf = cf;
+                    op1 = registers[opcode & 7];
+                    res = (op1 - 1);
+                    set_sub_flags(16, op1, 1, res);
+                    cf = saved_cf;
+                    registers[opcode & 7] = res & 0xFFFF;
+                    return;
+                }
+                case 0x50:
+                case 0x51:
+                case 0x52:
+                case 0x53:
+                case 0x54:
+                case 0x55:
+                case 0x56:
+                case 0x57:
+                    push16(registers[opcode & 7]);
+                    return;
+                case 0x58:
+                case 0x59:
+                case 0x5A:
+                case 0x5B:
+                case 0x5C:
+                case 0x5D:
+                case 0x5E:
+                case 0x5F:
+                    registers[opcode & 7] = pop16();
+                    return;
+                case 0x60:
+                case 0x70: // JO
+                    op1 = (byte) next_byte(); // -127 ... 128
+                    if (of) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x61:
+                case 0x71: // JNO
+                    op1 = (byte) next_byte();
+                    if (!of) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x62:
+                case 0x72: // JC
+                    op1 = (byte) next_byte();
+                    if (cf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x63:
+                case 0x73: // JNC
+                    op1 = (byte) next_byte();
+                    if (cf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x64:
+                case 0x74: // JZ
+                    op1 = (byte) next_byte();
+                    if (zf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x65:
+                case 0x75: // JNZ
+                    op1 = (byte) next_byte();
+                    if (!zf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x66:
+                case 0x76: // JBE
+                    op1 = (byte) next_byte();
+                    if (cf || zf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x67:
+                case 0x77: // JNBE
+                    op1 = (byte) next_byte();
+                    if (!cf && !zf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x68:
+                case 0x78: // JS
+                    op1 = (byte) next_byte();
+                    if (sf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x69:
+                case 0x79: // JNS
+                    op1 = (byte) next_byte();
+                    if (!sf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x6A:
+                case 0x7A: // JP
+                    op1 = (byte) next_byte();
+                    if (pf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x6B:
+                case 0x7B: // JNP
+                    op1 = (byte) next_byte();
+                    if (!pf) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x6C:
+                case 0x7C: // JL
+                    op1 = (byte) next_byte();
+                    if (sf != of) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x6D:
+                case 0x7D: // JNL
+                    op1 = (byte) next_byte();
+                    if (sf == of) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x6E:
+                case 0x7E: // JLE
+                    op1 = (byte) next_byte();
+                    if (zf || sf != of) {
+                        eip += op1;
+                    }
+                    return;
+                case 0x6F:
+                case 0x7F: // JNLE
+                    op1 = (byte) next_byte();
+                    if (!zf && sf == of) {
+                        eip += op1;
+                    }
+                    return;
+
                 case 0x90: // NOP
                 case 0xE6:
                     IO.write_port(next_byte(), get_reg8(AL));
-                    continue;
+                    return;
                 default:
                     throw new UnsupportedOperationException(String.format("Opcode %02x not found!", opcode));
             }
