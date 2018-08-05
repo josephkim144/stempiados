@@ -1,0 +1,8 @@
+| or
+& and
+>> shift right
+>>> unsigned shift right
+<< shift left
+^ xor
+~ not
+- negative
