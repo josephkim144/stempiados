@@ -3,19 +3,19 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package dos.emulator;
+package dos.emulator.cpu;
 
 /**
  *
  * @author jkim13
  */
-public class DOSEmulator {
-
+public class MemoryMap {
     /**
-     * @param args the command line arguments
+     * To use this class: 
+     * @param addr
+     * @param data 
      */
-    public static void main(String[] args) {
-        // TODO code application logic here
+    public void handler(int addr, int data){
+        throw new UnsupportedOperationException("TODO");
     }
-    
 }
