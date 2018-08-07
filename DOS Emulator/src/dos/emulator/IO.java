@@ -17,10 +17,11 @@ public class IO {
                 throw new IllegalStateException("Unknown port write!");
         }
     }
-    public static int read_port(int port, int value){
+    public static int read_port(int port){
         switch(port){
             default:
                 throw new IllegalStateException("Unknown port read!");
         }
     }
 }
+
