@@ -1,14 +1,28 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
 package dos.emulator;
+import javax.swing.*;
+import java.awt.*;
 
-/**
- *
- * @author jkim13
- */
-public class Screen {
-    
+public class Screen extends JFrame{
+
+	public static void main(String[] args) {
+		/*
+		 * Create gui / Control Settings
+		 */
+		Screen gui = new Screen();
+		gui.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		gui.setSize(640,400);
+		gui.setVisible(true);
+		gui.setTitle("StempiaDos");
+		gui.getContentPane().setBackground(Color.black);
+		
+		
+		
+		
+		
+		
+		
+		
+
+	}
+
 }
