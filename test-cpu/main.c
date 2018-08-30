@@ -48,8 +48,14 @@ void print_result(char* c, int op1, int op2, int result) {
 	print_result(#x "8", op1, op2, test_##x##8(op1, op2));\
 	flags=OSZAPC;print_result(#x "16", op1, op2, test_##x##16(op1, op2));\
 	print_result(#x "8", op1, op2, test_##x##8(op1, op2));
+#define DTEST1(x) \
+	flags=0;\
+	print_result(#x "8", op1, op2, test_##x(op1, op2));\
+	flags=OSZAPC;\
+	print_result(#x "8", op1, op2, test_##x(op1, op2));
 
 #define AOP(x) extern int test_##x##8(int op1, int op2);extern int test_##x##16(int op1, int op2);
+#define AOP1(x) extern int test_##x(int op1, int op2);
 
 		AOP(add);
 		AOP(or);
@@ -67,6 +73,11 @@ void print_result(char* c, int op1, int op2, int result) {
 		AOP(shr);
 		AOP(sar);
 		AOP(shl);
+		AOP1(das);
+		AOP1(daa);
+		AOP1(aaa);
+		AOP1(aam);
+		AOP1(aad);
 void test_arith() {
 	for(int i=1;i<sizeof(testingpairs)/sizeof(int);i++){
 		int op1 = testingpairs[i-1];
@@ -87,6 +98,11 @@ void test_arith() {
 		DTEST(shr);
 		DTEST(sar);
 		DTEST(shl);
+		DTEST1(das);
+		DTEST1(daa);
+		DTEST1(aaa);
+		DTEST1(aam);
+		DTEST1(aad);
 	}
 }
 

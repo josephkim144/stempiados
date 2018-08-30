@@ -6,7 +6,6 @@
 package dos.emulator.cpu;
 
 import dos.emulator.IO;
-import java.util.Stack;
 
 // TODO (bug fixes):
 //  - Make sure that callf is implemented correctly (doesn't use next_byte while updating cs/ip)
@@ -14,11 +13,9 @@ import java.util.Stack;
 //  - Make sure that rb/rw/wb/ww are not used when segment registers can be modified
 //  - Make sure that every case has either a return or a continue
 //  - Look over string instructions
-
 // TODO (features):
 //  - 80186 opcodes
 //  - FPU (64-bit only)
-
 /**
  *
  * @author jkim13
@@ -82,6 +79,22 @@ public class CPU {
     int additional_eflags_bits = 2;
 
     /**
+     * Sets processor to 8086 or 80186.
+     *
+     * Differences between 8086/80186: - 8086 pushes SP AFTER it has been
+     * decremented, 80186 does not - 8086 does NOT mask shifts - When writing a
+     * word to 0xFFFF, 80186 incorrectly writes to offset 0x10000, rather than 0
+     * as in 8086.
+     */
+    public int architecture = 8086;
+
+    /**
+     * Enables x87 FPU. Note: Only supports 64-bit doubles. Not implemented yet
+     */
+    public int fpu_enabled = 0;
+    public FPU fpu;
+
+    /**
      * Holds memory mappings
      */
     MemoryMap[] memory_maps;
@@ -93,12 +106,22 @@ public class CPU {
         if (ramsize < 1024 * 1024) {
             ramsize = 1024 * 1024; // 1 MB
         }
-        if ((ramsize | (ramsize - 1)) != 0) {// Make sure it is a power of two
+        if ((ramsize | (ramsize - 1)) != 0) { // Make sure it is a power of two
             ramsize = ramsize & ~(ramsize - 1);
         }
         ram = new byte[ramsize];
 
         memory_maps = new MemoryMap[256];
+
+        fpu = new FPU(this);
+    }
+
+    public void set_architecture(int cpu) {
+        architecture = cpu;
+    }
+
+    public int get_architecture() {
+        return architecture;
     }
 
     public void add_memory_map(MemoryMap a, int address) {
@@ -144,7 +167,14 @@ public class CPU {
     }
 
     private void ww(int seg, int offset, int value) {
-        write_byte(seg_translation(seg, offset), value);
+        if (architecture == 8086) { // We need to wrap around
+            write_byte(seg_translation(seg, offset), value);
+            write_byte(seg_translation(seg, offset + 1), value >> 8);
+        } else {
+            int phys = seg_translation(seg, offset);
+            write_byte(phys, value);
+            write_byte(phys + 1, value >> 8);
+        }
     }
 
     // Reading
@@ -153,15 +183,23 @@ public class CPU {
     }
 
     private int rw(int seg, int offset) {
-        return read_word(seg_translation(seg, offset));
+        if (architecture == 8086) {
+            return read_word(seg_translation(seg, offset));
+        } else {
+            int phys = seg_translation(seg, offset);
+            return read_word(phys);
+        }
     }
+
+    private int $cseg;
 
     private int seg_translation_internal(int sreg, int addr) {
         if (current_sreg != -1) {
             sreg = current_sreg;
             current_sreg = -1;
         }
-        return seg_translation(sreg, addr);
+        $cseg = sreg;
+        return addr;//seg_translation(sreg, addr);
     }
 
     private int decode_modrm(int modrm) {
@@ -223,71 +261,6 @@ public class CPU {
         }
     }
 
-    private int discard_first_op(int $, int value) {
-        return value & 0xFFFF;
-    }
-
-    /**
-     * Helps with LEA
-     *
-     * @param modrm
-     * @return
-     */
-    private int lea_op(int modrm) {
-        switch (modrm & ~0x38) {
-            case 0:
-                return discard_first_op(ds, registers[BX] + registers[SI]);
-            case 1:
-                return discard_first_op(ds, registers[BX] + registers[DI]);
-            case 2:
-                return discard_first_op(ss, registers[BP] + registers[SI]);
-            case 3:
-                return discard_first_op(ss, registers[BP] + registers[DI]);
-            case 4:
-                return discard_first_op(ds, registers[SI]);
-            case 5:
-                return discard_first_op(ds, registers[DI]);
-            case 6:
-                return discard_first_op(ds, next_word());
-            case 7:
-                return discard_first_op(ds, registers[BX]);
-            case 0x40:
-                return discard_first_op(ds, registers[BX] + registers[SI] + next_byte());
-            case 0x41:
-                return discard_first_op(ds, registers[BX] + registers[DI] + next_byte());
-            case 0x42:
-                return discard_first_op(ss, registers[BP] + registers[SI] + next_byte());
-            case 0x43:
-                return discard_first_op(ss, registers[BP] + registers[DI] + next_byte());
-            case 0x44:
-                return discard_first_op(ds, registers[SI] + next_byte());
-            case 0x45:
-                return discard_first_op(ds, registers[DI] + next_byte());
-            case 0x46:
-                return discard_first_op(ss, registers[BP] + next_byte());
-            case 0x47:
-                return discard_first_op(ds, registers[BX] + next_byte());
-            case 0x80:
-                return discard_first_op(ds, registers[BX] + registers[SI] + next_word());
-            case 0x81:
-                return discard_first_op(ds, registers[BX] + registers[DI] + next_word());
-            case 0x82:
-                return discard_first_op(ss, registers[BP] + registers[SI] + next_word());
-            case 0x83:
-                return discard_first_op(ss, registers[BP] + registers[DI] + next_word());
-            case 0x84:
-                return discard_first_op(ds, registers[SI] + next_word());
-            case 0x85:
-                return discard_first_op(ds, registers[DI] + next_word());
-            case 0x86:
-                return discard_first_op(ss, registers[BP] + next_word());
-            case 0x87:
-                return discard_first_op(ds, registers[BX] + next_word());
-            default:
-                throw new IllegalStateException("Unknown ModR/M value: " + Integer.toHexString(modrm & ~0x38));
-        }
-    }
-
     /**
      * Function to read byte from memory
      *
@@ -340,7 +313,8 @@ public class CPU {
      */
     public int read_rm8(int modrm) {
         if (modrm < 0xC0) {
-            return read_byte(decode_modrm(modrm));
+            int dm = decode_modrm(modrm);
+            return rb($cseg, dm);
         } else {
             return get_reg8(modrm & 7);
         }
@@ -354,7 +328,8 @@ public class CPU {
      */
     public void write_rm8(int modrm, int value) {
         if (modrm < 0xC0) {
-            write_byte(decode_modrm(modrm), value);
+            int dm = decode_modrm(modrm);
+            wb($cseg, dm, value);
         } else {
             set_reg8(modrm & 7, value);
         }
@@ -376,17 +351,10 @@ public class CPU {
      */
     public int read_rm16(int modrm) {
         if (modrm < 0xC0) {
-            return read_word(decode_modrm(modrm));
+            int dm = decode_modrm(modrm);
+            return rw($cseg, dm);
         } else {
             return get_reg16(modrm & 7);
-        }
-    }
-
-    public int[] read_rm32(int modrm) {
-        if (modrm < 0xC0) {
-            return new int[]{decode_modrm(modrm, 0), decode_modrm(modrm, 2)};
-        } else {
-            return null;
         }
     }
 
@@ -398,7 +366,8 @@ public class CPU {
      */
     public void write_rm16(int modrm, int value) {
         if (modrm < 0xC0) {
-            write_word(decode_modrm(modrm), value);
+            int dm = decode_modrm(modrm);
+            ww($cseg, dm, value);
         } else {
             set_reg16(modrm & 7, value);
         }
@@ -435,7 +404,7 @@ public class CPU {
     public void set_reg8(int id, int value) {
         int shift_constant = ((id & 4) << 1);
         registers[id & 3] &= ~(0xFF << shift_constant); // Clear out the byte
-        registers[id & 3] = (value & 0xFF) << shift_constant;
+        registers[id & 3] |= (value & 0xFF) << shift_constant;
     }
 
     /**
@@ -457,7 +426,7 @@ public class CPU {
     private void set_zf_pf_sf(int res, int size) {
         int SIGN_BIT = 1 << (size - 1);
         zf = res == 0;
-        pf = parity_table[res & 0xFF] == 1;
+        pf = parity_table[res & 0xFF] == 0;
         sf = (res & SIGN_BIT) != 0;
     }
 
@@ -471,7 +440,7 @@ public class CPU {
 
     private void set_sub_flags(int size, int left, int right, int res) {
         int SIGN_BIT = 1 << (size - 1);
-        cf = (left & (1 << size)) != 0;
+        cf = (res & (1 << size)) != 0;
         af = (((left ^ right) ^ res) & 0x10) != 0;
         of = (((left ^ right) & (res ^ left)) & SIGN_BIT) != 0;
         set_zf_pf_sf(res, size);
@@ -533,25 +502,6 @@ public class CPU {
         cf = (c & CF) != 0;
         this.additional_eflags_bits = c & ~(OF | SF | ZF | AF | PF | CF);
     }
-    // FPU stuff
-    /**
-     * The x87 (not x86!!) FPU consists of 8 floating point numbers arranged in
-     * a little stack. The Java Stack datatype is the best way to represent
-     * that.
-     */
-    public Stack<Double> fpstack = new Stack<>();
-
-    public void fpush(double d) {
-        fpstack.push(d);
-    }
-
-    public double fop(double d) {
-        return fpstack.pop();
-    }
-
-    public void fadd() {
-        fpstack.push(fpstack.pop() + fpstack.pop());
-    }
 
     // Main loop
     public void run() {
@@ -576,57 +526,183 @@ public class CPU {
         this.additional_eflags_bits &= 0xFCFF;
     }
 
+    protected void step() {
+        run_instruction();
+    }
+
+    public int run_arith(int size, int instruction, int op1, int op2) {
+        int res = 0;
+        switch (instruction) {
+            // ADD: Adds two numbers together
+            case 0:
+                res = op1 + op2;
+                set_add_flags(size, op1, op2, res);
+                break;
+            // SUB: Subtracts two numbers
+            case 1:
+                res = op1 | op2;
+                set_bit_flags(size, op1, op2, res);
+                break;
+            // ADC: Adds two numbers, plus the carry flag
+            case 2:
+                res = (cf ? 1 : 0) + (op1 + op2);
+                set_add_flags(size, op1, op2, res);
+                break;
+            // SBB: Subtracts two numbers, and then the carry flag
+            case 3:
+                res = (op1 - op2) - (cf ? 1 : 0);
+                set_sub_flags(size, op1, op2, res);
+                break;
+            // AND: Bitwise AND
+            case 4:
+                res = op1 & op2;
+                set_bit_flags(size, op1, op2, res);
+                break;
+            // SUB: Subtract two numbers
+            case 5:
+            case 7:
+                res = op1 - op2;
+                set_bit_flags(size, op1, op2, res);
+                break;
+            // XOR: Bitwise XOR
+            case 6:
+                res = op1 ^ op2;
+                set_bit_flags(size, op1, op2, res);
+                break;
+        }
+        return res;
+    }
+
+    int read_rm(int size, int modrm) {
+        if (size == 8) {
+            return read_rm8(modrm);
+        } else {
+            return read_rm16(modrm);
+        }
+    }
+
+    int read_reg(int size, int modrm) {
+        if (size == 8) {
+            return read_reg8(modrm);
+        } else {
+            return read_reg16(modrm);
+        }
+    }
+
+    int nextv(int opsz) {
+        if (opsz == 8) {
+            return next_byte();
+        } else {
+            return next_word();
+        }
+    }
+
+    void write_rm(int size, int modrm, int value) {
+        if (size == 8) {
+            write_rm8(modrm, value);
+        } else {
+            this.write_rm16(modrm, value);
+        }
+    }
+
+    void write_reg(int size, int modrm, int value) {
+        if (size == 8) {
+            write_reg8(modrm, value);
+        } else {
+            this.write_reg16(modrm, value);
+        }
+    }
+
     private void run_instruction() {
         while (true) {
             int opcode = next_byte();
             int modrm = 0, op1, op2, res;
             switch (opcode) {
-                // ADD
                 case 0x00:
-                    modrm = next_byte();
-                    op1 = read_rm8(modrm);
-                    op2 = read_reg8(modrm);
-                    res = op1 + op2;
-                    set_add_flags(8, op1, op2, res);
-                    write_rm8(modrm, res);
-                    return;
                 case 0x01:
-                    modrm = next_byte();
-                    op1 = read_rm16(modrm);
-                    op2 = read_reg16(modrm);
-                    res = op1 + op2;
-                    set_add_flags(16, op1, op2, res);
-                    write_rm16(modrm, res);
-                    return;
                 case 0x02:
-                    modrm = next_byte();
-                    op1 = read_reg8(modrm);
-                    op2 = read_rm8(modrm);
-                    res = op1 + op2;
-                    set_add_flags(8, op1, op2, res);
-                    write_reg8(modrm, res);
-                    return;
                 case 0x03:
-                    modrm = next_byte();
-                    op1 = read_reg16(modrm);
-                    op2 = read_rm16(modrm);
-                    res = op1 + op2;
-                    set_add_flags(16, op1, op2, res);
-                    write_reg16(modrm, res);
-                    return;
                 case 0x04:
-                    op1 = get_reg8(AL);
-                    op2 = next_byte();
-                    res = op1 + op2;
-                    set_add_flags(8, op1, op2, res);
-                    set_reg8(AL, res);
-                    return;
                 case 0x05:
-                    op1 = get_reg16(AX);
-                    op2 = next_word();
-                    res = op1 + op2;
-                    set_add_flags(16, op1, op2, res);
-                    set_reg16(AX, res);
+                case 0x08:
+                case 0x09:
+                case 0x0A:
+                case 0x0B:
+                case 0x0C:
+                case 0x0D:
+                case 0x10:
+                case 0x11:
+                case 0x12:
+                case 0x13:
+                case 0x14:
+                case 0x15:
+                case 0x18:
+                case 0x19:
+                case 0x1A:
+                case 0x1B:
+                case 0x1C:
+                case 0x1D:
+                case 0x20:
+                case 0x21:
+                case 0x22:
+                case 0x23:
+                case 0x24:
+                case 0x25:
+                case 0x28:
+                case 0x29:
+                case 0x2A:
+                case 0x2B:
+                case 0x2C:
+                case 0x2D:
+                case 0x30:
+                case 0x31:
+                case 0x32:
+                case 0x33:
+                case 0x34:
+                case 0x35:
+                case 0x38:
+                case 0x39:
+                case 0x3A:
+                case 0x3B:
+                case 0x3C:
+                case 0x3D:
+                    modrm = next_byte();
+                    int opsz = 8 << (opcode & 1);
+                    int opc = opcode >> 3;
+                    switch (opcode >> 1 & 3) {
+                        // 0 and 1: r/m, r
+                        case 0:
+                            op1 = read_rm(opsz, modrm);
+                            op2 = read_reg(opsz, modrm);
+                            break;
+                        // 2 and 3: r, r/m
+                        case 1:
+                            op1 = read_reg(opsz, modrm);
+                            op2 = read_rm(opsz, modrm);
+                            break;
+                        // 4 and 5: al, ib
+                        case 2:
+                            op1 = read_reg(opsz, 0xC0);
+                            op2 = nextv(opsz);
+                            break;
+                        // 6 and 7: Invalid
+                        default:
+                            throw new Error("Unexpected opcode: " + opcode);
+                    }
+                    res = run_arith(opsz, opc, op1, op2);
+                    if (opc != 7) {
+                        switch (opcode >> 1 & 3) {
+                            case 0:
+                                write_rm(opsz, modrm, res);
+                                break;
+                            case 1:
+                                write_reg(opsz, modrm, res);
+                                break;
+                            case 2:
+                                write_rm(opsz, 0xC0, res);
+                                break;
+                        }
+                    }
                     return;
                 case 0x06:
                     push16(es);
@@ -634,107 +710,11 @@ public class CPU {
                 case 0x07:
                     es = pop16();
                     return;
-
-                // OR
-                case 0x08:
-                    modrm = next_byte();
-                    op1 = read_rm8(modrm);
-                    op2 = read_reg8(modrm);
-                    res = op1 | op2;
-                    set_bit_flags(8, op1, op2, res);
-                    write_rm8(modrm, res);
-                    return;
-                case 0x09:
-                    modrm = next_byte();
-                    op1 = read_rm16(modrm);
-                    op2 = read_reg16(modrm);
-                    res = op1 | op2;
-                    set_bit_flags(16, op1, op2, res);
-                    write_rm16(modrm, res);
-                    return;
-                case 0x0A:
-                    modrm = next_byte();
-                    op1 = read_reg8(modrm);
-                    op2 = read_rm8(modrm);
-                    res = op1 | op2;
-                    set_bit_flags(8, op1, op2, res);
-                    write_reg8(modrm, res);
-                    return;
-                case 0x0B:
-                    modrm = next_byte();
-                    op1 = read_reg16(modrm);
-                    op2 = read_rm16(modrm);
-                    res = op1 | op2;
-                    set_bit_flags(16, op1, op2, res);
-                    write_reg16(modrm, res);
-                    return;
-                case 0x0C:
-                    op1 = get_reg8(AL);
-                    op2 = next_byte();
-                    res = op1 | op2;
-                    set_bit_flags(8, op1, op2, res);
-                    set_reg8(AL, res);
-                    return;
-                case 0x0D:
-                    op1 = get_reg16(AX);
-                    op2 = next_word();
-                    res = op1 | op2;
-                    set_bit_flags(16, op1, op2, res);
-                    set_reg16(AX, res);
-                    return;
                 case 0x0E:
                     push16(cs);
                     return;
                 case 0x0F:
                     cs = pop16();
-                    return;
-
-                // ADC
-                case 0x10:
-                    modrm = next_byte();
-                    op1 = read_rm8(modrm);
-                    op2 = read_reg8(modrm);
-                    res = (cf ? 1 : 0) + (op1 + op2);
-                    set_add_flags(8, op1, op2, res);
-                    write_rm8(modrm, res);
-                    return;
-                case 0x11:
-                    modrm = next_byte();
-                    op1 = read_rm16(modrm);
-                    op2 = read_reg16(modrm);
-                    res = (cf ? 1 : 0) + (op1 + op2);
-                    set_add_flags(16, op1, op2, res);
-                    write_rm16(modrm, res);
-                    return;
-                case 0x12:
-                    modrm = next_byte();
-                    op1 = read_reg8(modrm);
-                    op2 = read_rm8(modrm);
-                    res = (cf ? 1 : 0) + (op1 + op2);
-                    set_add_flags(8, op1, op2, res);
-                    write_reg8(modrm, res);
-                    return;
-                case 0x13:
-                    modrm = next_byte();
-                    op1 = read_reg16(modrm);
-                    op2 = read_rm16(modrm);
-                    res = (cf ? 1 : 0) + (op1 + op2);
-                    set_add_flags(16, op1, op2, res);
-                    write_reg16(modrm, res);
-                    return;
-                case 0x14:
-                    op1 = get_reg8(AL);
-                    op2 = next_byte();
-                    res = (cf ? 1 : 0) + op1 + op2;
-                    set_add_flags(8, op1, op2, res);
-                    set_reg8(AL, res);
-                    return;
-                case 0x15:
-                    op1 = get_reg16(AX);
-                    op2 = next_word();
-                    res = (cf ? 1 : 0) + (op1 + op2);
-                    set_add_flags(16, op1, op2, res);
-                    set_reg16(AX, res);
                     return;
                 case 0x16:
                     push16(ss);
@@ -742,113 +722,11 @@ public class CPU {
                 case 0x17:
                     ss = pop16();
                     return;
-
-                // SBB
-                case 0x18:
-                    modrm = next_byte();
-                    op1 = read_rm8(modrm);
-                    op2 = read_reg8(modrm);
-                    res = (op1 - op2);
-                    res -= (cf ? 1 : 0);
-                    set_sub_flags(8, op1, op2, res);
-                    write_rm8(modrm, res);
-                    return;
-                case 0x19:
-                    modrm = next_byte();
-                    op1 = read_rm16(modrm);
-                    op2 = read_reg16(modrm);
-                    res = (op1 - op2);
-                    res -= (cf ? 1 : 0);
-                    set_sub_flags(16, op1, op2, res);
-                    write_rm16(modrm, res);
-                    return;
-                case 0x1A:
-                    modrm = next_byte();
-                    op1 = read_reg8(modrm);
-                    op2 = read_rm8(modrm);
-                    res = (op1 - op2);
-                    res -= (cf ? 1 : 0);
-                    set_sub_flags(8, op1, op2, res);
-                    write_reg8(modrm, res);
-                    return;
-                case 0x1B:
-                    modrm = next_byte();
-                    op1 = read_reg16(modrm);
-                    op2 = read_rm16(modrm);
-                    res = (op1 - op2);
-                    res -= (cf ? 1 : 0);
-                    set_sub_flags(16, op1, op2, res);
-                    write_reg16(modrm, res);
-                    return;
-                case 0x1C:
-                    op1 = get_reg8(AL);
-                    op2 = next_byte();
-                    res = (op1 - op2);
-                    res -= (cf ? 1 : 0);
-                    set_sub_flags(8, op1, op2, res);
-                    set_reg8(AL, res);
-                    return;
-                case 0x1D:
-                    op1 = get_reg16(AX);
-                    op2 = next_word();
-                    res = (op1 - op2);
-                    res -= (cf ? 1 : 0);
-                    set_sub_flags(16, op1, op2, res);
-                    set_reg16(AX, res);
-                    return;
                 case 0x1E:
                     push16(ds);
                     return;
                 case 0x1F:
                     ds = pop16();
-                    return;
-
-                // AND
-                case 0x20:
-                    modrm = next_byte();
-                    op1 = read_rm8(modrm);
-                    op2 = read_reg8(modrm);
-                    res = op1 & op2;
-                    set_bit_flags(8, op1, op2, res);
-                    write_rm8(modrm, res);
-                    return;
-                case 0x21:
-                    modrm = next_byte();
-                    op1 = read_rm16(modrm);
-                    op2 = read_reg16(modrm);
-                    res = op1 & op2;
-                    set_bit_flags(16, op1, op2, res);
-                    write_rm16(modrm, res);
-                    return;
-                case 0x22:
-                    modrm = next_byte();
-                    op1 = read_reg8(modrm);
-                    op2 = read_rm8(modrm);
-                    res = (op1 & op2);
-                    set_bit_flags(8, op1, op2, res);
-                    write_reg8(modrm, res);
-                    return;
-                case 0x23:
-                    modrm = next_byte();
-                    op1 = read_reg16(modrm);
-                    op2 = read_rm16(modrm);
-                    res = (op1 & op2);
-                    set_bit_flags(16, op1, op2, res);
-                    write_reg16(modrm, res);
-                    return;
-                case 0x24:
-                    op1 = get_reg8(AL);
-                    op2 = next_byte();
-                    res = (op1 & op2);
-                    set_bit_flags(8, op1, op2, res);
-                    set_reg8(AL, res);
-                    return;
-                case 0x25:
-                    op1 = get_reg16(AX);
-                    op2 = next_word();
-                    res = op1 & op2;
-                    set_bit_flags(16, op1, op2, res);
-                    set_reg16(AX, res);
                     return;
                 case 0x26:
                     current_sreg = es;
@@ -874,56 +752,10 @@ public class CPU {
                         cf = false;
                     }
                     set_reg8(AL, al);
+                    this.set_zf_pf_sf(al, 8);
+                    of = false; // ?
                     return;
                 }
-
-                // SUB
-                case 0x28:
-                    modrm = next_byte();
-                    op1 = read_rm8(modrm);
-                    op2 = read_reg8(modrm);
-                    res = op1 - op2;
-                    set_sub_flags(8, op1, op2, res);
-                    write_rm8(modrm, res);
-                    return;
-                case 0x29:
-                    modrm = next_byte();
-                    op1 = read_rm16(modrm);
-                    op2 = read_reg16(modrm);
-                    res = op1 - op2;
-                    set_sub_flags(16, op1, op2, res);
-                    write_rm16(modrm, res);
-                    return;
-                case 0x2A:
-                    modrm = next_byte();
-                    op1 = read_reg8(modrm);
-                    op2 = read_rm8(modrm);
-                    res = (op1 - op2);
-                    set_sub_flags(8, op1, op2, res);
-                    write_reg8(modrm, res);
-                    return;
-                case 0x2B:
-                    modrm = next_byte();
-                    op1 = read_reg16(modrm);
-                    op2 = read_rm16(modrm);
-                    res = (op1 - op2);
-                    set_sub_flags(16, op1, op2, res);
-                    write_reg16(modrm, res);
-                    return;
-                case 0x2C:
-                    op1 = get_reg8(AL);
-                    op2 = next_byte();
-                    res = (op1 - op2);
-                    set_sub_flags(8, op1, op2, res);
-                    set_reg8(AL, res);
-                    break;
-                case 0x2D:
-                    op1 = get_reg16(AX);
-                    op2 = next_word();
-                    res = op1 - op2;
-                    set_sub_flags(16, op1, op2, res);
-                    set_reg16(AX, res);
-                    return;
                 case 0x2E:
                     current_sreg = cs;
                     continue;
@@ -931,6 +763,7 @@ public class CPU {
                     int old_al = get_reg8(AL);
                     int al = old_al;
                     boolean old_cf = cf;
+
                     cf = false;
                     if (((al & 15) > 9) || af) {
                         al -= 6;
@@ -946,113 +779,38 @@ public class CPU {
                     } else {
                         cf = false;
                     }
+                    this.set_zf_pf_sf(al, 8);
+                    of = false; // ?
                     set_reg8(AL, al);
                     return;
                 }
-
-                // XOR
-                case 0x30:
-                    modrm = next_byte();
-                    op1 = read_rm8(modrm);
-                    op2 = read_reg8(modrm);
-                    res = op1 ^ op2;
-                    set_bit_flags(8, op1, op2, res);
-                    write_rm8(modrm, res);
-                    return;
-                case 0x31:
-                    modrm = next_byte();
-                    op1 = read_rm16(modrm);
-                    op2 = read_reg16(modrm);
-                    res = op1 ^ op2;
-                    set_bit_flags(16, op1, op2, res);
-                    write_rm16(modrm, res);
-                    return;
-                case 0x32:
-                    modrm = next_byte();
-                    op1 = read_reg8(modrm);
-                    op2 = read_rm8(modrm);
-                    res = op1 ^ op2;
-                    set_bit_flags(8, op1, op2, res);
-                    write_reg8(modrm, res);
-                    return;
-                case 0x33:
-                    modrm = next_byte();
-                    op1 = read_reg16(modrm);
-                    op2 = read_rm16(modrm);
-                    res = op1 ^ op2;
-                    set_bit_flags(16, op1, op2, res);
-                    write_reg16(modrm, res);
-                    return;
-                case 0x34:
-                    op1 = get_reg8(AL);
-                    op2 = next_byte();
-                    res = (op1 ^ op2);
-                    set_bit_flags(8, op1, op2, res);
-                    set_reg8(AL, res);
-                    break;
-                case 0x35:
-                    op1 = get_reg16(AX);
-                    op2 = next_word();
-                    res = op1 ^ op2;
-                    set_bit_flags(16, op1, op2, res);
-                    set_reg16(AX, res);
-                    return;
                 case 0x36:
                     current_sreg = ss;
                     continue;
                 case 0x37:
                     // https://www.felixcloutier.com/x86/AAA.html
+                    boolean dddd = af;
                     if (((get_reg8(AL) & 15) > 9) || af) {
-                        registers[AX] = (registers[AX] + 0x106) & 0xFFFF;
+                        if (this.architecture == 8086) {
+                            set_reg8(AL, get_reg8(AL) + 6);
+                            set_reg8(AH, get_reg8(AH) + 1);
+                        } else {
+                            registers[AX] = (registers[AX] + 0x106) & 0xFFFF;
+                        }
                         af = true;
                         cf = true;
+
+                        // According to native?
+                        zf = false;
+                        sf = false;
                     } else {
                         af = false;
                         cf = false;
+                        // I think?
+                        this.set_zf_pf_sf(registers[AX], 16);
                     }
+                    of = false; // according to native
                     set_reg8(AL, 0x0F & get_reg8(AL));
-                    return;
-
-                // CMP
-                case 0x38:
-                    modrm = next_byte();
-                    op1 = read_rm8(modrm);
-                    op2 = read_reg8(modrm);
-                    res = op1 - op2;
-                    set_sub_flags(8, op1, op2, res);
-                    return;
-                case 0x39:
-                    modrm = next_byte();
-                    op1 = read_rm16(modrm);
-                    op2 = read_reg16(modrm);
-                    res = op1 - op2;
-                    set_sub_flags(16, op1, op2, res);
-                    return;
-                case 0x3A:
-                    modrm = next_byte();
-                    op1 = read_reg8(modrm);
-                    op2 = read_rm8(modrm);
-                    res = op1 - op2;
-                    set_sub_flags(8, op1, op2, res);
-                    return;
-                case 0x3B:
-                    modrm = next_byte();
-                    op1 = read_reg16(modrm);
-                    op2 = read_rm16(modrm);
-                    res = op1 - op2;
-                    set_sub_flags(16, op1, op2, res);
-                    return;
-                case 0x3C:
-                    op1 = get_reg8(AL);
-                    op2 = next_byte();
-                    res = (op1 - op2);
-                    set_sub_flags(8, op1, op2, res);
-                    return;
-                case 0x3D:
-                    op1 = get_reg16(AX);
-                    op2 = next_word();
-                    res = op1 - op2;
-                    set_sub_flags(16, op1, op2, res);
                     return;
                 case 0x3E:
                     current_sreg = ds;
@@ -1107,11 +865,19 @@ public class CPU {
                 case 0x51:
                 case 0x52:
                 case 0x53:
-                case 0x54:
+                //case 0x54:
                 case 0x55:
                 case 0x56:
                 case 0x57:
                     push16(registers[opcode & 7]);
+                    return;
+                case 0x54: // PUSH SP
+                    if (architecture == 8086) {
+                        registers[SP] = (registers[SP] - 2) & 0xFFFF;
+                        ww(ss, registers[SP], registers[SP]); // Pushes post sp-modified ESP
+                    } else {
+                        push16(registers[SP]);
+                    }
                     return;
                 case 0x58:
                 case 0x59:
@@ -1242,37 +1008,16 @@ public class CPU {
                     op2 = (byte) next_byte();
                     switch (modrm >> 3 & 7) {
                         case 0:
-                            res = op1 + op2;
-                            set_add_flags(8, op1, op2, res);
-                            break;
                         case 1:
-                            res = op1 | op2;
-                            set_bit_flags(8, op1, op2, res);
-                            break;
                         case 2:
-                            res = cf ? 1 : 0 + op1 + op2;
-                            set_add_flags(8, op1, op2, res);
-                            break;
                         case 3:
-                            res = op1 - op2;
-                            res -= cf ? 1 : 0;
-                            set_sub_flags(8, op1, op2, res);
-                            break;
                         case 4:
-                            res = op1 & op2;
-                            set_bit_flags(8, op1, op2, res);
-                            break;
                         case 5:
-                            res = op1 - op2;
-                            set_sub_flags(8, op1, op2, res);
-                            break;
                         case 6:
-                            res = op1 ^ op2;
-                            set_bit_flags(8, op1, op2, res);
+                            res = this.run_arith(16, modrm >> 3 & 7, op1, op2);
                             break;
                         case 7:
-                            res = op1 - op2;
-                            set_sub_flags(8, op1, op2, res);
+                            res = this.run_arith(16, modrm >> 3 & 7, op1, op2);
                             return;
                         default:
                             throw new Error("Unknown GRP3/16 opcode!");
@@ -1290,37 +1035,16 @@ public class CPU {
                     }
                     switch (modrm >> 3 & 7) {
                         case 0:
-                            res = op1 + op2;
-                            set_add_flags(16, op1, op2, res);
-                            break;
                         case 1:
-                            res = op1 | op2;
-                            set_bit_flags(16, op1, op2, res);
-                            break;
                         case 2:
-                            res = cf ? 1 : 0 + op1 + op2;
-                            set_add_flags(16, op1, op2, res);
-                            break;
                         case 3:
-                            res = op1 - op2;
-                            res -= cf ? 1 : 0;
-                            set_sub_flags(16, op1, op2, res);
-                            break;
                         case 4:
-                            res = op1 & op2;
-                            set_bit_flags(16, op1, op2, res);
-                            break;
                         case 5:
-                            res = op1 - op2;
-                            set_sub_flags(16, op1, op2, res);
-                            break;
                         case 6:
-                            res = op1 ^ op2;
-                            set_bit_flags(16, op1, op2, res);
+                            res = this.run_arith(16, modrm >> 3 & 7, op1, op2);
                             break;
                         case 7:
-                            res = op1 - op2;
-                            set_sub_flags(16, op1, op2, res);
+                            this.run_arith(16, 7, op1, op2);
                             return;
                         default:
                             throw new Error("Unknown GRP3/16 opcode!");
@@ -1398,7 +1122,7 @@ public class CPU {
                     if (modrm >> 6 == 3) {
                         throw new IllegalStateException("LEA with mod=3!");
                     }
-                    write_reg16(modrm, lea_op(modrm));
+                    write_reg16(modrm, decode_modrm(modrm));
                     return;
                 case 0x8E:
                     modrm = next_byte();
@@ -1847,47 +1571,67 @@ public class CPU {
                     res = 0;
                     switch (modrm >> 3 & 7) {
                         case 0: // ROL
-                            op2 &= 7;
-                            op1 = op1 << op2 | op1 >>> (8 - op2);
+                            if (architecture == 80186) {
+                                op2 &= 7;
+                            }
+                            res = op1 << op2 | op1 >>> (8 - op2);
                             cf = (op1 >> 7 & 1) != 0;
                             of = (((op1 >> 7) ^ (op1 >> 6)) & 1) != 0;
                             break;
                         case 1: // ROR
-                            op2 &= 7;
-                            op1 = op1 >>> op2 | op1 << (8 - op2);
+                            if (architecture == 80186) {
+                                op2 &= 7;
+                            }
+                            res = op1 >>> op2 | op1 << (8 - op2);
                             cf = (op1 >> 7 & 1) != 0;
-                            of = (((op1 >> 7) ^ (op1 >> 6)) & 1) != 0;
+                            of = (((res >> 7) ^ (res >> 6)) & 1) != 0;
                             break;
                         case 2: // RCL
-                            op1 %= 9;
+                            if (architecture == 80186) {
+                                op1 %= 9;
+                            }
                             res = (op1 << op2) | (cf ? 1 : 0) << (op2 - 1) | op1 >>> (9 - op2);
                             cf = (op1 >> 8 & 1) != 0;
                             of = ((op1 >> 7) ^ (cf ? 1 : 0)) != 0;
                             break;
                         case 3: // RCR
-                            op1 %= 9;
-                            res = (op1 >>> op2) | (cf ? 1 : 0) << (op2 - 1) | op1 << (9 - op2);
+                            if (architecture == 80186) {
+                                op1 %= 9;
+                            }
+                            res = (op1 >>> op2) | (cf ? 1 : 0) << (8 - op2) | op1 << (9 - op2);
                             cf = (op1 >> 8 & 1) != 0;
-                            of = ((op1 >> 7) ^ (cf ? 1 : 0)) != 0;
+                            of = (((res >> 7) ^ (res >> 6)) & 1) != 0;
                             break;
                         case 4: // SHL
                         case 6: // SAL
-                            op1 &= 7;
+                            if (architecture == 80186) {
+                                op1 &= 7;
+                            }
                             res = op1 << op2;
                             cf = (op1 >> (8 - op2) & 1) != 0;
                             of = ((res >>> 7) ^ (cf ? 1 : 0)) != 0;
+                            this.set_zf_pf_sf(res, 8);
+                            af = false;
                             break;
                         case 5: // SHR
-                            op1 &= 7;
+                            if (architecture == 80186) {
+                                op1 &= 7;
+                            }
                             res = op1 >>> op2;
                             cf = ((op1 & (1 << (op2 - 1))) >> (op2 - 1)) != 0;
                             of = (res << 1 ^ res) >> 7 != 0;
+                            this.set_zf_pf_sf(res, 8);
+                            af = false;
                             break;
                         case 7: // SAR
-                            op1 &= 7;
+                            if (architecture == 80186) {
+                                op1 &= 7;
+                            }
                             res = (byte) op1 >> op2;
                             cf = (op1 >> op2 - 1 & 0x1) != 0;
                             of = false;
+                            this.set_zf_pf_sf(res, 8);
+                            af = false;
                             break;
                         default:
                             throw new Error("Invalid DX opcode!");
@@ -1906,47 +1650,67 @@ public class CPU {
                     res = 0;
                     switch (modrm >> 3 & 7) {
                         case 0: // ROL
-                            op2 &= 15;
-                            op1 = op1 << op2 | op1 >>> (16 - op2);
+                            if (architecture == 80186) {
+                                op2 &= 15;
+                            }
+                            res = op1 << op2 | op1 >>> (16 - op2);
                             cf = (op1 >> 15 & 1) != 0;
                             of = (((op1 >> 15) ^ (op1 >> 14)) & 1) != 0;
                             break;
                         case 1: // ROR
-                            op2 &= 15;
-                            op1 = op1 >>> op2 | op1 << (16 - op2);
+                            if (architecture == 80186) {
+                                op2 &= 15;
+                            }
+                            res = op1 >>> op2 | op1 << (16 - op2);
                             cf = (op1 >> 15 & 1) != 0;
-                            of = (((op1 >> 15) ^ (op1 >> 14)) & 1) != 0;
+                            of = (((res >> 15) ^ (res >> 14)) & 1) != 0;
                             break;
                         case 2: // RCL
-                            op1 %= 17;
-                            res = (op1 << op2) | (cf ? 1 : 0) << (op2 - 1) | op1 >>> (17 - op2);
+                            if (architecture == 80186) {
+                                op1 %= 17;
+                            }
+                            res = (op1 << op2) | (cf ? 1 : 0) << (op2 - 1) | op1 >>> (16 - op2);
                             cf = (op1 >> 16 & 1) != 0;
                             of = ((op1 >> 15) ^ (cf ? 1 : 0)) != 0;
                             break;
                         case 3: // RCR
-                            op1 %= 17;
-                            res = (op1 >>> op2) | (cf ? 1 : 0) << (op2 - 1) | op1 << (17 - op2);
+                            if (architecture == 80186) {
+                                op1 %= 17;
+                            }
+                            res = (op1 >>> op2) | (cf ? 1 : 0) << (16 - op2) | op1 << (17 - op2);
                             cf = (op1 >> 16 & 1) != 0;
-                            of = ((op1 >> 15) ^ (cf ? 1 : 0)) != 0;
+                            of = (((res >> 15) ^ (res >> 14)) & 1) != 0;
                             break;
                         case 4: // SHL
                         case 6: // SAL
-                            op1 &= 15;
+                            if (architecture == 80186) {
+                                op1 &= 15;
+                            }
                             res = op1 << op2;
                             cf = (op1 >> (16 - op2) & 1) != 0;
                             of = ((res >>> 15) ^ (cf ? 1 : 0)) != 0;
+                            this.set_zf_pf_sf(res, 16);
+                            af = false;
                             break;
                         case 5: // SHR
-                            op1 &= 15;
+                            if (architecture == 80186) {
+                                op1 &= 15;
+                            }
                             res = op1 >>> op2;
                             cf = ((op1 & (1 << (op2 - 1))) >> (op2 - 1)) != 0;
                             of = (res << 1 ^ res) >> 15 != 0;
+                            this.set_zf_pf_sf(res, 16);
+                            af = false;
                             break;
                         case 7: // SAR
-                            op1 &= 7;
+                            if (architecture == 80186) {
+                                op1 &= 7;
+                            }
                             res = (short) op1 >> op2;
                             cf = (op1 >> op2 - 1 & 0x1) != 0;
                             of = false;
+                            this.set_zf_pf_sf(res, 16);
+                            af = false;
                             break;
                         default:
                             throw new Error("Invalid DX opcode!");
@@ -1960,17 +1724,19 @@ public class CPU {
                     int i8 = next_byte();
                     set_reg8(AH, tempAL / i8);
                     set_reg8(AL, tempAL % i8);
+                    of = af = cf = false;
                     this.set_zf_pf_sf(get_reg8(AL), 8);
                     return;
                 }
                 case 0xD5: {
-                    // https://www.felixcloutier.com/x86/AAM.html
+                    // https://www.felixcloutier.com/x86/AAD.html
                     int tempAL = get_reg8(AL);
                     int tempAH = get_reg8(AH);
                     int i8 = next_byte();
                     set_reg8(AH, 0);
                     set_reg8(AL, (tempAL + (tempAH * i8)) & 0xFF);
-                    this.set_zf_pf_sf(get_reg8(AL), 8);
+                    //this.set_zf_pf_sf(get_reg8(AL), 8);
+                    this.set_add_flags(8, tempAL, (tempAH * i8), get_reg8(AL));
                     return;
                 }
                 case 0xD6: { // SALC
@@ -1989,7 +1755,13 @@ public class CPU {
                 case 0xDC:
                 case 0xDE:
                 case 0xDF:
-                    throw new UnsupportedOperationException("TODO: FPU");
+                    if (fpu_enabled == 1) {
+                        fpu.op(opcode, next_byte());
+                    } else {
+                        System.err.println("Ignoring FPU operation!");
+                        next_byte(); // ModR/M
+                    }
+                    return;
                 case 0xE0:
                     // LOOPNZ
                     op1 = next_byte();
@@ -2236,32 +2008,41 @@ public class CPU {
                         case 0:
                         case 2:
                         case 4:
-                        case 6:
+                        case 6: {
+                            boolean saved_cf = cf;
                             op1 = read_rm8(modrm);
                             op2 = 1;
                             res = (op1 + op2);
                             set_add_flags(8, op1, op2, res);
+                            cf = saved_cf;
                             return;
+                        }
                         case 1:
                         case 3:
                         case 5:
-                        case 7:
+                        case 7: {
+                            boolean saved_cf = cf;
                             op1 = read_rm8(modrm);
                             op2 = 1;
                             res = (op1 - op2);
                             set_sub_flags(8, op1, op2, res);
+                            cf = saved_cf;
                             return;
+                        }
                     }
                     return;
                 case 0xFF:
                     modrm = next_byte();
                     switch (modrm >> 3 & 7) {
-                        case 0:
+                        case 0: {
+                            boolean saved_cf = cf;
                             op1 = read_rm16(modrm);
                             op2 = 1;
                             res = (op1 + op2);
                             set_add_flags(16, op1, op2, res);
+                            cf = saved_cf;
                             return;
+                        }
                         case 2:
                             op1 = read_rm16(modrm);
                             push16(eip);
@@ -2276,30 +2057,43 @@ public class CPU {
                             if (modrm >> 6 == 3) {
                                 throw new IllegalStateException("JMPF FF with MOD=3??");
                             }
-                            int[] dst = read_rm32(modrm);
-                            eip = dst[0];
-                            cs = dst[1];
+                            int rm = this.decode_modrm(modrm);
+                            eip = rw($cseg, rm + 0);
+                            cs = rw($cseg, rm + 2);
                             return;
                         }
-                        case 3:// CALLF
+                        case 3: {// CALLF
                             push16(cs);
                             push16(eip);
                             if (modrm >> 6 == 3) {
                                 throw new IllegalStateException("JMPF FF with MOD=3??");
                             }
-                            int[] dst = read_rm32(modrm);
-                            eip = dst[0];
-                            cs = dst[1];
+                            int rm = this.decode_modrm(modrm);
+                            eip = rw($cseg, rm + 0);
+                            cs = rw($cseg, rm + 2);
                             return;
-                        case 6:
-                            push16(read_rm16(modrm));
+                        }
+                        case 6: // PUSH
+                            if (modrm == 0xF4) {
+                                if (architecture == 8086) {
+                                    registers[SP] = (registers[SP] - 2) & 0xFFFF;
+                                    ww(ss, registers[SP], registers[SP]); // Pushes post sp-modified ESP
+                                } else {
+                                    push16(registers[SP]);
+                                }
+                            } else {
+                                push16(read_rm16(modrm));
+                            }
                             return;
-                        case 1:
+                        case 1: {
+                            boolean saved_cf = cf;
                             op1 = read_rm16(modrm);
                             op2 = 1;
                             res = (op1 - op2);
                             set_sub_flags(16, op1, op2, res);
+                            cf = saved_cf;
                             return;
+                        }
                         case 7:
                             throw new IllegalStateException("UNKNOWN FF OP!");
                     }

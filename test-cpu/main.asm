@@ -29,6 +29,17 @@ global %2
 	ret
 %endmacro
 
+%macro bcd 2
+global %1
+%1:
+	push dword [in_flags]
+	popf
+	mov ax, [esp + 4]
+	%2
+	pushf
+	pop dword [flags]
+	ret
+%endmacro
 opz test_add8, test_add16, add, cx
 opz test_or8, test_or16, or, cx
 opz test_adc8, test_adc16, adc, cx
@@ -45,3 +56,9 @@ opz test_rcl8, test_rcl16, rcl, cl
 opz test_shl8, test_shl16, shl, cl
 opz test_sar8, test_sar16, sar, cl
 opz test_shr8, test_shr16, shr, cl
+
+bcd test_das, das
+bcd test_daa, daa
+bcd test_aaa, aaa
+bcd test_aam, aam
+bcd test_aad, aad
