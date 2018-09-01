@@ -314,6 +314,7 @@ public class CPU {
     public int read_rm8(int modrm) {
         if (modrm < 0xC0) {
             int dm = decode_modrm(modrm);
+            $global_dm = dm;
             return rb($cseg, dm);
         } else {
             return get_reg8(modrm & 7);
@@ -329,6 +330,8 @@ public class CPU {
     public void write_rm8(int modrm, int value) {
         if (modrm < 0xC0) {
             int dm = decode_modrm(modrm);
+            $global_dm = dm;
+            System.out.printf("[%02x] Current sreg: %04x, offset: %04x, makes: %08x\n", modrm, $cseg, dm, ($cseg << 4) + dm);
             wb($cseg, dm, value);
         } else {
             set_reg8(modrm & 7, value);
@@ -343,6 +346,22 @@ public class CPU {
         set_reg8(modrm >> 3 & 7, value);
     }
 
+    
+    int $global_dm = 0;
+    public void write_rm8_IMM(int modrm, int value){
+        if(modrm < 0xC0){
+            wb($cseg, $global_dm, value);
+        }else{
+            write_rm16(modrm, value);
+        }
+    }
+    public void write_rm16_IMM(int modrm, int value){
+        if(modrm < 0xC0){
+            ww($cseg, $global_dm, value);
+        }else{
+            write_rm16(modrm, value);
+        }
+    }
     /**
      * Read and operand pointed to by an r/m8.
      *
@@ -352,6 +371,7 @@ public class CPU {
     public int read_rm16(int modrm) {
         if (modrm < 0xC0) {
             int dm = decode_modrm(modrm);
+            $global_dm = dm;
             return rw($cseg, dm);
         } else {
             return get_reg16(modrm & 7);
@@ -367,6 +387,7 @@ public class CPU {
     public void write_rm16(int modrm, int value) {
         if (modrm < 0xC0) {
             int dm = decode_modrm(modrm);
+            $global_dm = dm;
             ww($cseg, dm, value);
         } else {
             set_reg16(modrm & 7, value);
@@ -503,13 +524,29 @@ public class CPU {
         this.additional_eflags_bits = c & ~(OF | SF | ZF | AF | PF | CF);
     }
 
+    int instructions = 0;
+
     // Main loop
     public void run() {
-        while (true) {
-            run_instruction();
-            current_sreg = -1;
-            rep = 0;
-        }
+        instructions++;
+        current_sreg = -1;
+        rep = 0;
+
+        System.out.printf("(%d) %04x:%04x -> %02x\n", instructions, cs, eip, this.rb(cs, eip));
+        
+        run_instruction();
+        dump_state();
+    }
+    
+    public void dump_state(){
+        System.out.printf("AX: %04x CX: %04x DX: %04x BX: %04x\n", registers[0],registers[1],registers[2],registers[3]);
+        System.out.printf("SP: %04x BP: %04x SI: %04x DI: %04x\n", registers[4],registers[5],registers[6],registers[7]);
+    }
+
+    public void reset() {
+        eip = 0xFFF0;
+        cs = 0xF000;
+        this.additional_eflags_bits = 2;
     }
 
     /**
@@ -1006,23 +1043,11 @@ public class CPU {
                     modrm = next_byte();
                     op1 = read_rm8(modrm);
                     op2 = (byte) next_byte();
-                    switch (modrm >> 3 & 7) {
-                        case 0:
-                        case 1:
-                        case 2:
-                        case 3:
-                        case 4:
-                        case 5:
-                        case 6:
-                            res = this.run_arith(16, modrm >> 3 & 7, op1, op2);
-                            break;
-                        case 7:
-                            res = this.run_arith(16, modrm >> 3 & 7, op1, op2);
-                            return;
-                        default:
-                            throw new Error("Unknown GRP3/16 opcode!");
+                    res = this.run_arith(8, modrm >> 3 & 7, op1, op2);
+                    if ((modrm >> 3 & 7) == 7) {
+                        return;
                     }
-                    write_rm8(modrm, res);
+                    write_rm8_IMM(modrm, res);
                     return;
                 case 0x81:
                 case 0x83:
@@ -1033,23 +1058,11 @@ public class CPU {
                     } else {
                         op2 = next_word(); // 81
                     }
-                    switch (modrm >> 3 & 7) {
-                        case 0:
-                        case 1:
-                        case 2:
-                        case 3:
-                        case 4:
-                        case 5:
-                        case 6:
-                            res = this.run_arith(16, modrm >> 3 & 7, op1, op2);
-                            break;
-                        case 7:
-                            this.run_arith(16, 7, op1, op2);
-                            return;
-                        default:
-                            throw new Error("Unknown GRP3/16 opcode!");
+                    res = this.run_arith(16, modrm >> 3 & 7, op1, op2);
+                    if ((modrm >> 3 & 7) == 7) {
+                        return;
                     }
-                    write_rm16(modrm, res);
+                    write_rm16_IMM(modrm, res);
                     return;
                 case 0x84: // TEST8
                     modrm = next_byte();
@@ -1127,7 +1140,8 @@ public class CPU {
                 case 0x8E:
                     modrm = next_byte();
                     op2 = read_rm16(modrm);
-                    switch (op2) {
+                    System.out.printf("%04x\n", op2);
+                    switch (modrm >> 3 & 7) {
                         case CS:
                             cs = op2;
                             break;
@@ -1496,14 +1510,16 @@ public class CPU {
                     if (modrm >> 6 == 3) {
                         throw new IllegalStateException("C6/C7 w/ mod=3");
                     }
-                    write_rm8(modrm, next_byte());
+                    read_rm8(modrm);
+                    write_rm8_IMM(modrm, next_byte()); // TODO: Massive bug here
                     return;
                 case 0xC7: // MOV
                     modrm = next_byte();
                     if (modrm >> 6 == 3) {
                         throw new IllegalStateException("C6/C7 w/ mod=3");
                     }
-                    write_rm16(modrm, next_word());
+                    read_rm8(modrm);
+                    write_rm16_IMM(modrm, next_word());
                     return;
                 case 0xC8: {
                     int tmp = next_word();
@@ -2104,4 +2120,3 @@ public class CPU {
         }
     }
 }
-
