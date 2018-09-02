@@ -271,6 +271,8 @@ public class Screen extends JFrame {
 
     int WIDTH = 0;
     int HEIGHT = 0;
+    
+    int TEXT_WIDTH = 0, TEXT_HEIGHT = 0;
 
     JPanel parentPanel;
 
@@ -306,9 +308,41 @@ public class Screen extends JFrame {
 
     public static final int BWHITE = 16579836;
 
+    public boolean cursorVisible;
+
+    private int cursorState = 0;
+
+    public int cursorx, cursory;
+
+    private char tmap[][];
+    private int fmap[][];
+    private int bmap[][];
+
+    public void renderCursor() {
+        int o = offset(cursorx, cursory) + 640 * 14;
+        cursorState ^= 1;
+        int p = getpos(cursorx, cursory);
+        if (cursorState != 0) {
+            this.write_character(tmap[cursory][cursorx], fmap[cursory][cursorx], bmap[cursory][cursorx], cursorx, cursory);
+        } else {
+            for (int i = 0; i < 2; i++) {
+                for (int j = 0; j < 8; j++) {
+                    pixels[o + j] |= fmap[cursory][cursorx];
+                }
+                o += 640;
+            }
+        }
+    }
+    private void redraw_character(int x, int y){
+            this.write_character(tmap[y][x], fmap[y][x], bmap[y][x], cursorx, cursory);
+    }
+
     public long text_info[];
+    
+    private static Screen instance;
 
     public Screen() {
+        instance = this;
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(640, 400);
         setTitle("StempiaDos");
@@ -323,6 +357,8 @@ public class Screen extends JFrame {
 
         // Create frame thing
         parentPanel = new JPanel() {
+            private long lastUpdateTime;
+
             @Override
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
@@ -428,11 +464,22 @@ public class Screen extends JFrame {
 
     public void setTextModeSize(int rows, int cols) {
         text_info = new long[rows * cols * 2];
+        tmap = new char[rows][cols];
+        fmap = new int[rows][cols];
+        bmap = new int[rows][cols];
+        
+        TEXT_WIDTH = cols;
+        TEXT_HEIGHT = rows;
+        
         resizeScreen(cols * 8, rows * 16);
     }
 
     private int offset(int x, int y) {
         return ((x << 3) + (y << 4) * WIDTH);
+    }
+
+    private int getpos(int x, int y) {
+        return x + y * 80;
     }
 
     /**
@@ -446,6 +493,11 @@ public class Screen extends JFrame {
      */
     public void write_character(char ch, int f, int b, int x, int y) {
         // Ported from JavaScript
+
+        tmap[y][x] = ch;
+        fmap[y][x] = f;
+        bmap[y][x] = b;
+
         int o = this.offset(x, y);
         int[] e = vgadata[ch & 0xFF];
 
@@ -471,7 +523,14 @@ public class Screen extends JFrame {
         }
     }
 
+    private long lastUpdateTime;
+
     public void update() {
+        long currentTime = System.currentTimeMillis();
+        if (currentTime - lastUpdateTime > 127L) {
+            renderCursor();
+            lastUpdateTime = currentTime;
+        }
         this.source.newPixels();
     }
 
@@ -481,3 +540,4 @@ public class Screen extends JFrame {
         }
     }
 }
+
